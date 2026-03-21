@@ -1,0 +1,1710 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>MedAI Council</title>
+    <link
+      href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,ital,wght@9..144,0,300;9..144,0,500;9..144,1,300&family=DM+Sans:wght@300;400;500&family=DM+Mono:wght@400;500&display=swap"
+      rel="stylesheet"
+    />
+    <style>
+      :root {
+        --bg: #06101e;
+        --surface: #0b1626;
+        --card: #0f1d2f;
+        --card2: #121e31;
+        --border: rgba(255, 255, 255, 0.07);
+        --border-hi: rgba(255, 255, 255, 0.13);
+        --teal: #00dba4;
+        --teal-dim: rgba(0, 219, 164, 0.11);
+        --blue: #4a9eff;
+        --blue-dim: rgba(74, 158, 255, 0.11);
+        --purple: #b39dff;
+        --purple-dim: rgba(179, 157, 255, 0.11);
+        --amber: #fbbf24;
+        --amber-dim: rgba(251, 191, 36, 0.11);
+        --green: #34d399;
+        --green-dim: rgba(52, 211, 153, 0.11);
+        --red: #f87171;
+        --red-dim: rgba(248, 113, 113, 0.09);
+        --text: #c0d4ec;
+        --muted: #4a6280;
+        --bright: #e6f0ff;
+        --r: 13px;
+        --rs: 8px;
+      }
+      * {
+        margin: 0;
+        padding: 0;
+        box-sizing: border-box;
+      }
+      body {
+        background: var(--bg);
+        color: var(--text);
+        font-family: 'DM Sans', sans-serif;
+        font-size: 15px;
+        line-height: 1.6;
+        min-height: 100vh;
+      }
+      body::before {
+        content: '';
+        position: fixed;
+        inset: 0;
+        background-image: radial-gradient(
+          rgba(0, 219, 164, 0.025) 1px,
+          transparent 1px
+        );
+        background-size: 36px 36px;
+        pointer-events: none;
+        z-index: 0;
+      }
+      #app {
+        max-width: 860px;
+        margin: 0 auto;
+        padding: 40px 22px 100px;
+        position: relative;
+        z-index: 1;
+      }
+
+      .hdr {
+        text-align: center;
+        margin-bottom: 44px;
+      }
+      .hpill {
+        display: inline-flex;
+        align-items: center;
+        gap: 7px;
+        background: var(--teal-dim);
+        border: 1px solid rgba(0, 219, 164, 0.22);
+        color: var(--teal);
+        font-size: 10px;
+        font-weight: 500;
+        letter-spacing: 2.5px;
+        text-transform: uppercase;
+        padding: 5px 14px;
+        border-radius: 20px;
+        margin-bottom: 16px;
+      }
+      .hpill::before {
+        content: '';
+        width: 6px;
+        height: 6px;
+        border-radius: 50%;
+        background: var(--teal);
+        animation: blink 2s ease-in-out infinite;
+      }
+      h1 {
+        font-family: 'Fraunces', serif;
+        font-size: 42px;
+        font-weight: 300;
+        color: var(--bright);
+        letter-spacing: -0.5px;
+        margin-bottom: 6px;
+      }
+      h1 em {
+        color: var(--teal);
+        font-style: italic;
+      }
+      .hsub {
+        color: var(--muted);
+        font-size: 13px;
+        letter-spacing: 0.3px;
+      }
+      .server-badge {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        font-family: 'DM Mono', monospace;
+        font-size: 11px;
+        color: var(--muted);
+        margin-top: 8px;
+      }
+      .server-dot {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--red);
+      }
+      .server-dot.ok {
+        background: var(--green);
+      }
+
+      .pipe {
+        display: flex;
+        align-items: center;
+        margin-bottom: 36px;
+        padding: 0 8px;
+      }
+      .pstep {
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        flex-shrink: 0;
+      }
+      .pdot {
+        width: 30px;
+        height: 30px;
+        border-radius: 50%;
+        border: 1.5px solid var(--border-hi);
+        background: var(--surface);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 11px;
+        color: var(--muted);
+        transition: all 0.4s;
+      }
+      .pstep.active .pdot {
+        border-color: var(--teal);
+        background: var(--teal-dim);
+        color: var(--teal);
+        box-shadow: 0 0 0 4px rgba(0, 219, 164, 0.07);
+      }
+      .pstep.done .pdot {
+        border-color: var(--teal);
+        background: var(--teal);
+        color: #051810;
+      }
+      .plabel {
+        font-size: 10px;
+        color: var(--muted);
+        margin-top: 5px;
+        text-align: center;
+        width: 68px;
+        letter-spacing: 0.3px;
+      }
+      .pstep.active .plabel,
+      .pstep.done .plabel {
+        color: var(--teal);
+        opacity: 0.9;
+      }
+      .pline {
+        flex: 1;
+        height: 1px;
+        background: var(--border);
+        margin-bottom: 20px;
+        min-width: 12px;
+        transition: background 0.4s;
+      }
+      .pline.done {
+        background: var(--teal);
+        opacity: 0.25;
+      }
+
+      .disc {
+        background: var(--red-dim);
+        border: 1px solid rgba(248, 113, 113, 0.18);
+        border-radius: var(--rs);
+        padding: 9px 13px;
+        font-size: 12px;
+        color: rgba(248, 113, 113, 0.8);
+        margin-bottom: 26px;
+        line-height: 1.5;
+      }
+
+      .scard {
+        background: var(--card);
+        border: 1px solid var(--border);
+        border-radius: var(--r);
+        margin-bottom: 14px;
+        overflow: hidden;
+        animation: slideUp 0.35s ease forwards;
+      }
+      @keyframes slideUp {
+        from {
+          opacity: 0;
+          transform: translateY(8px);
+        }
+        to {
+          opacity: 1;
+          transform: translateY(0);
+        }
+      }
+      .shead {
+        padding: 17px 20px;
+        display: flex;
+        align-items: center;
+        gap: 12px;
+      }
+      .sicon {
+        width: 36px;
+        height: 36px;
+        border-radius: 9px;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 15px;
+        flex-shrink: 0;
+      }
+      .it {
+        background: var(--teal-dim);
+      }
+      .ib {
+        background: var(--blue-dim);
+      }
+      .ip {
+        background: var(--purple-dim);
+      }
+      .ia {
+        background: var(--amber-dim);
+      }
+      .ig {
+        background: var(--green-dim);
+      }
+      .stitle {
+        font-weight: 500;
+        font-size: 15px;
+        color: var(--bright);
+      }
+      .ssub {
+        font-size: 12px;
+        color: var(--muted);
+      }
+      .sstat {
+        margin-left: auto;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+        font-size: 12px;
+        color: var(--muted);
+        flex-shrink: 0;
+      }
+      .sindic {
+        width: 7px;
+        height: 7px;
+        border-radius: 50%;
+        background: var(--border-hi);
+      }
+      .sindic.loading {
+        background: var(--amber);
+        animation: blink 1s ease-in-out infinite;
+      }
+      .sindic.done {
+        background: var(--green);
+      }
+      @keyframes blink {
+        0%,
+        100% {
+          opacity: 1;
+        }
+        50% {
+          opacity: 0.3;
+        }
+      }
+      .sbody {
+        border-top: 1px solid var(--border);
+        padding: 18px 20px;
+      }
+
+      textarea {
+        width: 100%;
+        background: var(--surface);
+        border: 1px solid var(--border-hi);
+        color: var(--text);
+        font-family: 'DM Sans', sans-serif;
+        font-size: 14px;
+        padding: 12px 14px;
+        border-radius: var(--rs);
+        resize: vertical;
+        outline: none;
+        transition: border-color 0.2s;
+        line-height: 1.6;
+      }
+      textarea:focus {
+        border-color: var(--teal);
+      }
+      textarea::placeholder {
+        color: var(--muted);
+      }
+      .fhint {
+        font-size: 12px;
+        color: var(--muted);
+        margin-top: 5px;
+      }
+      .brow {
+        display: flex;
+        gap: 8px;
+        margin-top: 13px;
+        justify-content: flex-end;
+      }
+      .btn {
+        display: inline-flex;
+        align-items: center;
+        gap: 6px;
+        padding: 10px 20px;
+        border-radius: var(--rs);
+        font-family: 'DM Sans', sans-serif;
+        font-size: 14px;
+        font-weight: 500;
+        cursor: pointer;
+        border: none;
+        transition: all 0.2s;
+      }
+      .bprim {
+        background: var(--teal);
+        color: #05120f;
+      }
+      .bprim:hover:not(:disabled) {
+        background: #00f5b8;
+        transform: translateY(-1px);
+      }
+      .bprim:disabled {
+        background: var(--border-hi);
+        color: var(--muted);
+        cursor: not-allowed;
+      }
+      .bghost {
+        background: var(--surface);
+        color: var(--text);
+        border: 1px solid var(--border-hi);
+      }
+      .bghost:hover {
+        background: var(--card2);
+      }
+
+      .fqblock {
+        font-family: 'DM Mono', monospace;
+        font-size: 13px;
+        line-height: 1.9;
+        color: var(--text);
+        white-space: pre-wrap;
+        background: var(--surface);
+        padding: 14px 16px;
+        border-radius: var(--rs);
+        border-left: 2px solid var(--teal);
+        margin-bottom: 14px;
+      }
+
+      .cgrid {
+        display: flex;
+        flex-direction: column;
+        gap: 13px;
+      }
+      .pcard {
+        background: var(--surface);
+        border-radius: var(--rs);
+        padding: 15px 17px;
+        border: 1px solid var(--border);
+        animation: slideUp 0.35s ease forwards;
+      }
+      .phead {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 11px;
+      }
+      .pav {
+        width: 33px;
+        height: 33px;
+        border-radius: 50%;
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        font-size: 11px;
+        font-weight: 500;
+        flex-shrink: 0;
+      }
+      .avt {
+        background: var(--teal-dim);
+        color: var(--teal);
+      }
+      .avb {
+        background: var(--blue-dim);
+        color: var(--blue);
+      }
+      .avp {
+        background: var(--purple-dim);
+        color: var(--purple);
+      }
+      .pname {
+        font-weight: 500;
+        font-size: 14px;
+        color: var(--bright);
+      }
+      .pspec {
+        font-size: 11px;
+        color: var(--muted);
+      }
+      .pbody {
+        font-size: 13.5px;
+        line-height: 1.75;
+        color: var(--text);
+        white-space: pre-wrap;
+      }
+
+      .plist {
+        display: flex;
+        flex-direction: column;
+        gap: 11px;
+      }
+      .paper {
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--rs);
+        padding: 13px 15px;
+      }
+      .ptitle {
+        font-weight: 500;
+        font-size: 14px;
+        color: var(--bright);
+        margin-bottom: 2px;
+      }
+      .pmeta {
+        font-size: 11px;
+        color: var(--muted);
+        margin-bottom: 7px;
+      }
+      .prelev {
+        font-size: 12px;
+        color: var(--teal);
+        font-style: italic;
+        margin-bottom: 5px;
+      }
+      .psum {
+        font-size: 13px;
+        color: var(--text);
+        line-height: 1.5;
+        margin-bottom: 9px;
+      }
+      .plink {
+        display: inline-flex;
+        align-items: center;
+        gap: 4px;
+        color: var(--blue);
+        font-size: 12px;
+        text-decoration: none;
+        font-family: 'DM Mono', monospace;
+      }
+      .plink:hover {
+        text-decoration: underline;
+      }
+
+      .dcard {
+        background: var(--surface);
+        border-radius: var(--rs);
+        padding: 18px 20px;
+        margin-bottom: 13px;
+      }
+      .dlabel {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 1.5px;
+        color: var(--muted);
+        font-weight: 500;
+        margin-bottom: 5px;
+      }
+      .dprimary {
+        font-family: 'Fraunces', serif;
+        font-size: 24px;
+        font-weight: 400;
+        color: var(--bright);
+        margin-bottom: 3px;
+      }
+      .dicd {
+        font-family: 'DM Mono', monospace;
+        font-size: 12px;
+        color: var(--muted);
+        margin-bottom: 11px;
+      }
+      .crow {
+        display: flex;
+        align-items: center;
+        gap: 10px;
+        margin-bottom: 13px;
+        flex-wrap: wrap;
+      }
+      .ctrack {
+        flex: 1;
+        height: 3px;
+        background: var(--border-hi);
+        border-radius: 2px;
+        overflow: hidden;
+        min-width: 80px;
+      }
+      .cfill {
+        height: 100%;
+        background: var(--teal);
+        border-radius: 2px;
+        transition: width 1.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+      }
+      .clabel {
+        font-size: 12px;
+        color: var(--muted);
+        font-family: 'DM Mono', monospace;
+        white-space: nowrap;
+      }
+      .ubadge {
+        display: inline-flex;
+        align-items: center;
+        padding: 3px 10px;
+        border-radius: 20px;
+        font-size: 11px;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 0.5px;
+      }
+      .ur {
+        background: var(--green-dim);
+        color: var(--green);
+      }
+      .uu {
+        background: var(--amber-dim);
+        color: var(--amber);
+      }
+      .ue {
+        background: var(--red-dim);
+        color: var(--red);
+      }
+      .difitem {
+        display: flex;
+        align-items: center;
+        gap: 8px;
+        font-size: 13px;
+        color: var(--text);
+        padding: 3px 0;
+      }
+      .difbullet {
+        width: 4px;
+        height: 4px;
+        border-radius: 50%;
+        background: var(--blue);
+        flex-shrink: 0;
+      }
+      .prognosis {
+        font-size: 13.5px;
+        color: var(--text);
+        line-height: 1.75;
+        font-style: italic;
+        border-left: 2px solid var(--blue);
+        padding-left: 12px;
+        margin-top: 13px;
+      }
+      .mt2 {
+        margin-top: 8px;
+      }
+      .mt3 {
+        margin-top: 13px;
+      }
+
+      .psections {
+        display: flex;
+        flex-direction: column;
+        gap: 9px;
+      }
+      .psec {
+        background: var(--surface);
+        border-radius: var(--rs);
+        overflow: hidden;
+      }
+      .pshead {
+        padding: 9px 13px;
+        font-size: 11px;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 1.2px;
+        display: flex;
+        align-items: center;
+        gap: 6px;
+      }
+      .pst {
+        color: var(--teal);
+        background: var(--teal-dim);
+      }
+      .psb {
+        color: var(--blue);
+        background: var(--blue-dim);
+      }
+      .psp {
+        color: var(--purple);
+        background: var(--purple-dim);
+      }
+      .psg {
+        color: var(--green);
+        background: var(--green-dim);
+      }
+      .psa {
+        color: var(--amber);
+        background: var(--amber-dim);
+      }
+      .psr {
+        color: var(--red);
+        background: var(--red-dim);
+      }
+      .psbody {
+        padding: 12px 13px;
+        font-size: 13.5px;
+        line-height: 1.8;
+        color: var(--text);
+        white-space: pre-wrap;
+      }
+
+      .msgwrap {
+        background: var(--card2);
+        border: 1px solid rgba(52, 211, 153, 0.18);
+        border-radius: var(--r);
+        overflow: hidden;
+      }
+      .msghdr {
+        padding: 13px 18px;
+        background: var(--green-dim);
+        border-bottom: 1px solid rgba(52, 211, 153, 0.14);
+      }
+      .msgbadge {
+        font-size: 10px;
+        font-weight: 500;
+        text-transform: uppercase;
+        letter-spacing: 1.5px;
+        color: var(--green);
+      }
+      .msgbody {
+        padding: 20px 20px;
+        font-size: 15px;
+        line-height: 1.85;
+        color: var(--bright);
+        white-space: pre-wrap;
+      }
+      .msgbtns {
+        padding: 0 20px 18px;
+        display: flex;
+        gap: 8px;
+        justify-content: flex-end;
+      }
+
+      .followup-panel {
+        padding: 0 20px 22px;
+        border-top: 1px solid var(--border);
+      }
+      .followup-panel .fuh {
+        font-size: 14px;
+        font-weight: 500;
+        color: var(--bright);
+        margin-bottom: 6px;
+      }
+      .followup-panel .fusub {
+        font-size: 13px;
+        color: var(--muted);
+        line-height: 1.55;
+        margin-bottom: 14px;
+      }
+      .followup-panel .fulab {
+        display: block;
+        font-size: 11px;
+        text-transform: uppercase;
+        letter-spacing: 0.08em;
+        color: var(--muted);
+        margin: 14px 0 7px;
+      }
+      .followup-panel .fu-ta {
+        width: 100%;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--rs);
+        color: var(--text);
+        font-family: inherit;
+        font-size: 13.5px;
+        line-height: 1.55;
+        padding: 10px 12px;
+        resize: vertical;
+      }
+      .followup-panel .fu-ta:focus {
+        outline: none;
+        border-color: rgba(74, 158, 255, 0.35);
+      }
+      .followup-panel #fu-btn {
+        margin-top: 14px;
+      }
+      .res-banner {
+        font-size: 12.5px;
+        line-height: 1.5;
+        color: var(--amber);
+        background: var(--amber-dim);
+        border: 1px solid rgba(251, 191, 36, 0.2);
+        border-radius: var(--rs);
+        padding: 10px 12px;
+        margin-bottom: 14px;
+      }
+      .fu-pair {
+        margin-top: 14px;
+        padding: 14px 16px;
+        background: var(--surface);
+        border: 1px solid var(--border);
+        border-radius: var(--r);
+      }
+      .fu-pair .fu-qlabel {
+        font-size: 10px;
+        text-transform: uppercase;
+        letter-spacing: 0.1em;
+        color: var(--muted);
+        margin-bottom: 6px;
+      }
+      .fu-pair .fu-qtext {
+        font-size: 13px;
+        color: var(--text);
+        font-style: italic;
+        margin-bottom: 12px;
+        line-height: 1.5;
+      }
+      .fu-pair .fu-atext {
+        font-size: 14px;
+        color: var(--bright);
+        line-height: 1.75;
+        white-space: pre-wrap;
+      }
+
+      .errbox {
+        background: var(--red-dim);
+        border: 1px solid rgba(248, 113, 113, 0.2);
+        border-radius: var(--rs);
+        padding: 12px 15px;
+        font-size: 13px;
+        color: var(--red);
+        line-height: 1.5;
+        margin-top: 10px;
+      }
+
+      .ldots {
+        display: flex;
+        align-items: center;
+        gap: 5px;
+        padding: 2px 0;
+      }
+      .ldot {
+        width: 5px;
+        height: 5px;
+        border-radius: 50%;
+        background: var(--muted);
+        animation: dotPulse 1.2s ease-in-out infinite;
+      }
+      .ldot:nth-child(2) {
+        animation-delay: 0.2s;
+      }
+      .ldot:nth-child(3) {
+        animation-delay: 0.4s;
+      }
+      @keyframes dotPulse {
+        0%,
+        80%,
+        100% {
+          opacity: 0.3;
+          transform: scale(0.8);
+        }
+        40% {
+          opacity: 1;
+          transform: scale(1);
+        }
+      }
+
+      ::-webkit-scrollbar {
+        width: 5px;
+      }
+      ::-webkit-scrollbar-track {
+        background: var(--bg);
+      }
+      ::-webkit-scrollbar-thumb {
+        background: var(--border-hi);
+        border-radius: 3px;
+      }
+      @media (max-width: 600px) {
+        h1 {
+          font-size: 30px;
+        }
+        .plabel {
+          width: 54px;
+          font-size: 9px;
+        }
+      }
+    </style>
+  </head>
+  <body>
+    <div id="app">
+      <div class="hdr">
+        <div class="hpill">AI Medical Intelligence System</div>
+        <h1>MedAI <em>Council</em></h1>
+        <p class="hsub">
+          Multidisciplinary Physician Deliberation · Research Analysis · Patient
+          Communication
+        </p>
+        <div class="server-badge">
+          <div class="server-dot" id="srv-dot"></div>
+          <span id="srv-txt">Connecting to localhost:8000…</span>
+        </div>
+      </div>
+      <div class="pipe" id="pipe"></div>
+      <div class="disc">
+        ⚠ Demonstration system only. All outputs are AI-generated and must not
+        substitute for licensed medical advice, diagnosis, or treatment. Always
+        consult a qualified healthcare professional.
+      </div>
+      <div id="stages"></div>
+      <div id="active"></div>
+    </div>
+
+    <script>
+      /* ── Config ─────────────────────────────────────── */
+      const API = 'http://localhost:8000';
+
+      /* ── State ──────────────────────────────────────── */
+      const S = {
+        step: 0,
+        symptoms: '',
+        fqQ: '',
+        fqA: '',
+        physicians: [], // [{id, name, specialty, initials, assessment}]
+        council_roster: [], // experts chosen for deliberation (from select-experts)
+        deliberation_experts: [],
+        deliberation_display: '',
+        deliberation_case_summary: '',
+        deliberation_focus_areas: [],
+        deliberation_reason: '',
+        research: [],
+        consensus: null,
+        plan: '',
+        message: '',
+      };
+
+      const PIPE_STEPS = [
+        { n: '1', l: 'Intake' },
+        { n: '2', l: 'Council' },
+        { n: '3', l: 'Research' },
+        { n: '4', l: 'Diagnosis' },
+        { n: '5', l: 'Plan' },
+        { n: '6', l: 'Message' },
+      ];
+
+      const AV_COLORS = ['avt', 'avb', 'avp'];
+      const BORDER_COLORS = ['var(--teal)', 'var(--blue)', 'var(--purple)'];
+
+      const PLAN_KEYS = [
+        { k: 'IMMEDIATE ACTIONS', l: 'Immediate Actions', c: 'pst', i: '⚡' },
+        { k: 'MEDICATIONS TO CONSIDER', l: 'Medications', c: 'psb', i: '💊' },
+        { k: 'DIAGNOSTIC TESTS', l: 'Diagnostic Tests', c: 'psp', i: '🧪' },
+        { k: 'LIFESTYLE MODIFICATIONS', l: 'Lifestyle', c: 'psg', i: '🌱' },
+        { k: 'FOLLOW-UP SCHEDULE', l: 'Follow-up Schedule', c: 'psa', i: '📅' },
+        { k: 'WARNING SIGNS', l: 'Warning Signs', c: 'psr', i: '⚠️' },
+      ];
+
+      /* ── HTTP helpers ───────────────────────────────── */
+      async function post(path, body) {
+        const res = await fetch(`${API}${path}`, {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(body),
+        });
+        const json = await res.json();
+        if (!res.ok) throw new Error(json.detail || `HTTP ${res.status}`);
+        return json;
+      }
+
+      /* ── Server health check ────────────────────────── */
+      async function checkServer() {
+        try {
+          const r = await fetch(`${API}/health`);
+          if (r.ok) {
+            getEl('srv-dot').className = 'server-dot ok';
+            getEl('srv-txt').textContent = 'Backend connected · localhost:8000';
+            return true;
+          }
+        } catch {}
+        getEl('srv-dot').className = 'server-dot';
+        getEl('srv-txt').textContent =
+          'Backend offline — start with: uvicorn main:app --reload';
+        return false;
+      }
+
+      /* ── DOM helpers ────────────────────────────────── */
+      function esc(s) {
+        return String(s || '')
+          .replace(/&/g, '&amp;')
+          .replace(/</g, '&lt;')
+          .replace(/>/g, '&gt;')
+          .replace(/"/g, '&quot;');
+      }
+
+      function renderMarkdown(md) {
+        let html = esc(md);
+        // Bold: **text** → <strong>text</strong>
+        html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+        // Italic: *text* → <em>text</em>
+        html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
+        // Line breaks: \n → <br>
+        html = html.replace(/\n/g, '<br>');
+        // Convert back to HTML-safe format while preserving tags
+        return html;
+      }
+
+      function getEl(id) {
+        return document.getElementById(id);
+      }
+      function setActive(html) {
+        getEl('active').innerHTML = html;
+      }
+      function appendStage(html) {
+        const d = document.createElement('div');
+        d.innerHTML = html;
+        if (d.firstElementChild)
+          getEl('stages').appendChild(d.firstElementChild);
+      }
+      function scrollBot() {
+        setTimeout(
+          () =>
+            window.scrollTo({
+              top: document.body.scrollHeight,
+              behavior: 'smooth',
+            }),
+          50,
+        );
+      }
+
+      function renderPipe() {
+        let h = '';
+        PIPE_STEPS.forEach((s, i) => {
+          const done = i < S.step,
+            active = i === S.step;
+          h += `<div class="pstep ${done ? 'done' : active ? 'active' : ''}">
+      <div class="pdot">${done ? '✓' : s.n}</div>
+      <div class="plabel">${s.l}</div>
+    </div>`;
+          if (i < PIPE_STEPS.length - 1)
+            h += `<div class="pline ${done ? 'done' : ''}"></div>`;
+        });
+        getEl('pipe').innerHTML = h;
+      }
+
+      function loadingCard(iconCls, icon, title, sub, statusText, id) {
+        return `<div class="scard" id="${id}">
+    <div class="shead">
+      <div class="sicon ${iconCls}">${icon}</div>
+      <div><div class="stitle">${title}</div><div class="ssub">${sub}</div></div>
+      <div class="sstat"><div class="sindic loading"></div><span>${statusText}</span></div>
+    </div>
+    <div class="sbody"><div class="ldots"><div class="ldot"></div><div class="ldot"></div><div class="ldot"></div></div></div>
+  </div>`;
+      }
+
+      function frozenCard(iconCls, icon, title, sub, statusText, bodyHtml) {
+        return `<div class="scard">
+    <div class="shead">
+      <div class="sicon ${iconCls}">${icon}</div>
+      <div><div class="stitle">${title}</div><div class="ssub">${sub}</div></div>
+      <div class="sstat"><div class="sindic done"></div><span>${statusText}</span></div>
+    </div>
+    <div class="sbody">${bodyHtml}</div>
+  </div>`;
+      }
+
+      function showErr(msg) {
+        const box = `<div class="errbox">⚠ ${esc(msg)}</div>`;
+        getEl('active').insertAdjacentHTML('beforeend', box);
+      }
+
+      /* ── Stage 0: Intake ────────────────────────────── */
+      function showIntake() {
+        renderPipe();
+        setActive(`<div class="scard" id="intake-card">
+    <div class="shead">
+      <div class="sicon it">🩺</div>
+      <div><div class="stitle">Patient Intake</div><div class="ssub">Describe your symptoms to begin the assessment</div></div>
+    </div>
+    <div class="sbody">
+      <textarea id="symp-in" rows="5" placeholder="Describe your symptoms in detail — when they started, severity (1-10), any associated symptoms, current medications, relevant medical history, and anything that makes them better or worse…"></textarea>
+      <div class="fhint">The more detail you provide, the more accurate the physician council's assessment will be.</div>
+      <div class="brow">
+        <button class="btn bprim" onclick="submitSymptoms()">Begin Intake Assessment →</button>
+      </div>
+    </div>
+  </div>`);
+      }
+
+      async function submitSymptoms() {
+        const val = getEl('symp-in')?.value?.trim();
+        if (!val || val.length < 10) {
+          getEl('symp-in').style.borderColor = 'var(--red)';
+          setTimeout(() => (getEl('symp-in').style.borderColor = ''), 2000);
+          return;
+        }
+        S.symptoms = val;
+
+        appendStage(
+          frozenCard(
+            'it',
+            '🩺',
+            'Patient Intake',
+            'Symptoms recorded',
+            'Logged',
+            `<p style="font-size:13px;color:var(--text);font-style:italic;line-height:1.6;">"${esc(val.substring(0, 200))}${val.length > 200 ? '…' : ''}"</p>`,
+          ),
+        );
+
+        setActive(
+          loadingCard(
+            'it',
+            '💬',
+            'Follow-up Assessment',
+            'Intake Coordinator — Formulating questions',
+            'Analyzing…',
+            'fq-card',
+          ),
+        );
+        scrollBot();
+
+        try {
+          const data = await post('/api/intake/followup', {
+            symptoms: S.symptoms,
+          });
+          S.fqQ = data.questions;
+          showFollowup(data.questions);
+        } catch (e) {
+          showErr(`Intake agent error: ${e.message}`);
+        }
+      }
+
+      function showFollowup(q) {
+        setActive(`<div class="scard">
+    <div class="shead">
+      <div class="sicon it">💬</div>
+      <div><div class="stitle">Follow-up Questions</div><div class="ssub">Intake Coordinator — Reply using the same numbers (1. … 2. …)</div></div>
+      <div class="sstat"><div class="sindic loading"></div><span>Awaiting responses</span></div>
+    </div>
+    <div class="sbody">
+      <div class="fqblock">${esc(q)}</div>
+      <textarea id="fq-in" rows="5" placeholder="1. Your answer…&#10;2. …&#10;3. …&#10;4. …"></textarea>
+      <div class="brow">
+        <button class="btn bprim" onclick="submitFollowup()">Submit & Convene Physician Council →</button>
+      </div>
+    </div>
+  </div>`);
+        scrollBot();
+      }
+
+      async function submitFollowup() {
+        const val = getEl('fq-in')?.value?.trim();
+        if (!val || val.length < 5) return;
+        S.fqA = val;
+
+        appendStage(
+          frozenCard(
+            'it',
+            '💬',
+            'Follow-up Questions',
+            'Patient responses recorded',
+            'Complete',
+            `<p style="font-size:13px;color:var(--text);line-height:1.6;font-style:italic;">"${esc(val.substring(0, 180))}${val.length > 180 ? '…' : ''}"</p>`,
+          ),
+        );
+        setActive('');
+        S.step = 1;
+        renderPipe();
+        await runDeliberation();
+      }
+
+      /* ── Stage 0.5: Deliberation Expert Selection ────────────────── */
+      async function runDeliberation() {
+        setActive(`<div class="scard">
+    <div class="shead">
+      <div class="sicon ib">🔍</div>
+      <div><div class="stitle">Deliberation Expert Selection</div><div class="ssub">Analyzing case to select specialists…</div></div>
+      <div class="sstat"><div class="sindic loading"></div><span>Selecting experts…</span></div>
+    </div>
+    <div class="sbody"><p style="color:var(--text);">Determining optimal specialist combination for this case…</p></div>
+  </div>`);
+        scrollBot();
+
+        try {
+          const data = await post('/api/deliberation/select-experts', {
+            symptoms: S.symptoms,
+            followup_answers: S.fqA,
+          });
+          S.deliberation_experts = data.deliberation_experts;
+          S.deliberation_display = data.display_text;
+          S.deliberation_case_summary = data.case_summary || '';
+          S.deliberation_focus_areas = Array.isArray(data.focus_areas)
+            ? data.focus_areas
+            : [];
+          S.deliberation_reason = data.reason_for_selection || '';
+          S.council_roster = Array.isArray(data.experts) ? data.experts : [];
+          showExpertSelection(data.display_text, data.experts);
+          {
+            const wrap = getEl('active');
+            const sc = wrap?.querySelector('.scard');
+            if (sc) appendStage(sc.outerHTML);
+            setActive('');
+            renderPipe();
+            await runCouncil();
+          }
+        } catch (e) {
+          showErr(`Deliberation selection error: ${e.message}`);
+          setActive('');
+          renderPipe();
+          S.council_roster = [];
+          S.deliberation_case_summary = '';
+          S.deliberation_focus_areas = [];
+          S.deliberation_reason = '';
+          await runCouncil();
+          return;
+        }
+      }
+
+      /* ── Stage 1: Physician Council ─────────────────── */
+      async function runCouncil() {
+        S.physicians = [];
+        setActive(`<div class="scard" id="council-card">
+    <div class="shead">
+      <div class="sicon ib">⚕️</div>
+      <div><div class="stitle">Physician Council</div><div class="ssub">Multidisciplinary Team — Active Deliberation</div></div>
+      <div class="sstat"><div class="sindic loading" id="cs-dot"></div><span id="cs-txt">Convening physicians…</span></div>
+    </div>
+    <div class="sbody"><div class="cgrid" id="cgrid"></div></div>
+  </div>`);
+        scrollBot();
+
+        let roster = [];
+        if (S.council_roster && S.council_roster.length > 0) {
+          roster = S.council_roster;
+        }
+        try {
+          if (!roster.length) {
+            const r = await fetch(`${API}/agents`);
+            const d = await r.json();
+            roster = d.physicians;
+          }
+        } catch {
+          roster = [
+            {
+              id: 'internal',
+              name: 'Dr. Elena Vasquez',
+              specialty: 'Internal Medicine & Primary Care',
+              initials: 'EV',
+            },
+            {
+              id: 'cardiology',
+              name: 'Dr. James Okafor',
+              specialty: 'Cardiology & Pulmonology',
+              initials: 'JO',
+            },
+            {
+              id: 'neurology',
+              name: 'Dr. Priya Sharma',
+              specialty: 'Neurology & Psychiatry',
+              initials: 'PS',
+            },
+          ];
+        }
+
+        const councilContext = [
+          S.deliberation_case_summary &&
+            `Case summary: ${S.deliberation_case_summary}`,
+          S.deliberation_focus_areas?.length &&
+            `Focus areas: ${S.deliberation_focus_areas.join('; ')}`,
+          S.deliberation_reason &&
+            `Selection rationale: ${S.deliberation_reason}`,
+        ]
+          .filter(Boolean)
+          .join('\n\n');
+
+        for (let i = 0; i < roster.length; i++) {
+          const p = roster[i];
+          addPhysCard(p, i);
+          scrollBot();
+
+          try {
+            const data = await post('/api/council/physician', {
+              physician_id: p.id,
+              symptoms: S.symptoms,
+              followup_answers: S.fqA,
+              council_context: councilContext,
+              prior_assessments: S.physicians.map(x => ({
+                name: x.name,
+                specialty: x.specialty,
+                assessment: x.assessment,
+              })),
+            });
+            S.physicians.push({ ...p, assessment: data.assessment });
+            updatePhysCard(p.id, data.assessment);
+            getEl('cs-txt').textContent =
+              `${i + 1}/${roster.length} physicians assessed`;
+          } catch (e) {
+            updatePhysCard(p.id, `Assessment unavailable: ${e.message}`);
+          }
+        }
+
+        getEl('cs-dot').className = 'sindic done';
+        getEl('cs-txt').textContent = 'Deliberation complete';
+        appendStage(getEl('council-card').outerHTML);
+        setActive('');
+        S.step = 2;
+        renderPipe();
+        await runResearch();
+      }
+
+      function addPhysCard(p, idx) {
+        const grid = getEl('cgrid');
+        if (!grid) return;
+        const d = document.createElement('div');
+        d.id = `pc-${p.id}`;
+        d.className = 'pcard';
+        d.style.borderLeft = `2px solid ${BORDER_COLORS[idx] || BORDER_COLORS[0]}`;
+        d.innerHTML = `<div class="phead">
+    <div class="pav ${AV_COLORS[idx] || AV_COLORS[0]}">${esc(p.initials)}</div>
+    <div><div class="pname">${esc(p.name)}</div><div class="pspec">${esc(p.specialty)}</div></div>
+  </div>
+  <div class="pbody" id="pb-${p.id}">
+    <div style="display:flex;align-items:center;gap:10px;">
+      <div class="ldots"><div class="ldot"></div><div class="ldot"></div><div class="ldot"></div></div>
+      <span style="font-size:13px;color:var(--muted);">Reviewing patient file…</span>
+    </div>
+  </div>`;
+        grid.appendChild(d);
+      }
+
+      function updatePhysCard(id, text) {
+        const el = getEl(`pb-${id}`);
+        if (el) el.textContent = text;
+      }
+
+      /* ── Stage 2: Research ──────────────────────────── */
+      async function runResearch() {
+        setActive(
+          loadingCard(
+            'ia',
+            '🔬',
+            'Research Review',
+            'Dr. Amara Osei — Clinical Research Specialist',
+            'Searching literature…',
+            'res-card',
+          ),
+        );
+        scrollBot();
+
+        try {
+          const data = await post('/api/research', {
+            symptoms: S.symptoms,
+            followup_answers: S.fqA,
+            assessments: S.physicians.map(p => ({
+              name: p.name,
+              specialty: p.specialty,
+              assessment: p.assessment,
+            })),
+          });
+          S.research = data.papers;
+          showResearchCards(data.papers, data.parse_warning);
+        } catch (e) {
+          showErr(`Research agent error: ${e.message}`);
+          setActive('');
+          S.step = 3;
+          renderPipe();
+          await runConsensus();
+        }
+      }
+
+      function showResearchCards(papers, parseWarning) {
+        const banner = parseWarning
+          ? `<div class="res-banner" role="status">${esc(parseWarning)}</div>`
+          : '';
+        const phtml = papers
+          .map(p => {
+            const pmid = String(p.pmid || '').trim();
+            const url = String(p.url || '').trim();
+            let linkLine = '';
+            if (pmid && /^\d+$/.test(pmid)) {
+              const href =
+                url || `https://pubmed.ncbi.nlm.nih.gov/${pmid}/`;
+              linkLine = `<a href="${esc(href)}" target="_blank" rel="noopener noreferrer" class="plink">🔗 PubMed PMID ${esc(pmid)}</a>`;
+            } else if (url) {
+              linkLine = `<a href="${esc(url)}" target="_blank" rel="noopener noreferrer" class="plink">🔗 Open link</a>`;
+            } else {
+              linkLine = `<span class="plink" style="opacity:0.65;font-size:13px;">No PubMed link for this entry — verify sources independently.</span>`;
+            }
+            return `<div class="paper">
+    <div class="ptitle">${esc(p.title)}</div>
+    <div class="pmeta">${esc(p.authors)} · ${esc(p.journal)} · ${esc(p.year)}</div>
+    <div class="prelev">Why this matters: ${esc(p.relevance)}</div>
+    <div class="psum">${esc(p.summary)}</div>
+    ${linkLine}
+  </div>`;
+          })
+          .join('');
+
+        const card = `<div class="scard" id="res-done">
+    <div class="shead">
+      <div class="sicon ia">🔬</div>
+      <div><div class="stitle">Research Review</div><div class="ssub">Dr. Amara Osei — Clinical Research Specialist</div></div>
+      <div class="sstat"><div class="sindic done"></div><span>${papers.length} papers identified</span></div>
+    </div>
+    <div class="sbody"><div class="plist">${banner}${phtml}</div></div>
+  </div>`;
+
+        setActive(card);
+        scrollBot();
+        setTimeout(async () => {
+          appendStage(getEl('res-done').outerHTML);
+          setActive('');
+          S.step = 3;
+          renderPipe();
+          await runConsensus();
+        }, 900);
+      }
+
+      /* ── Stage 3: Consensus / Diagnosis ────────────── */
+      async function runConsensus() {
+        setActive(
+          loadingCard(
+            'ip',
+            '📊',
+            'Diagnosis & Prognosis',
+            'Prof. Michael Chen — Chief of Medicine',
+            'Synthesizing findings…',
+            'con-card',
+          ),
+        );
+        scrollBot();
+
+        try {
+          const data = await post('/api/consensus', {
+            symptoms: S.symptoms,
+            followup_answers: S.fqA,
+            assessments: S.physicians.map(p => ({
+              name: p.name,
+              specialty: p.specialty,
+              assessment: p.assessment,
+            })),
+            research: S.research,
+          });
+          S.consensus = data.consensus;
+          showDiagnosis(data.consensus);
+        } catch (e) {
+          showErr(`Consensus agent error: ${e.message}`);
+          setActive('');
+          S.step = 4;
+          renderPipe();
+          await runPlan();
+        }
+      }
+
+      function showDiagnosis(c) {
+        const uc =
+          c.urgency === 'emergent'
+            ? 'ue'
+            : c.urgency === 'urgent'
+              ? 'uu'
+              : 'ur';
+        const diffs = (c.differentials || [])
+          .map(
+            d =>
+              `<div class="difitem"><div class="difbullet"></div><span>${esc(d)}</span></div>`,
+          )
+          .join('');
+
+        const card = `<div class="scard" id="con-done">
+    <div class="shead">
+      <div class="sicon ip">📊</div>
+      <div><div class="stitle">Diagnosis & Prognosis</div><div class="ssub">Prof. Michael Chen — Chief of Medicine</div></div>
+      <div class="sstat"><div class="sindic done"></div><span>Consensus reached</span></div>
+    </div>
+    <div class="sbody">
+      <div class="dcard">
+        <div class="dlabel">Primary Diagnosis</div>
+        <div class="dprimary">${esc(c.primaryDiagnosis)}</div>
+        <div class="dicd">${esc(c.icdCode || '')}</div>
+        <div class="crow">
+          <span class="clabel">Confidence</span>
+          <div class="ctrack"><div class="cfill" id="cfill" style="width:0%"></div></div>
+          <span class="clabel">${c.confidence}%</span>
+          <span class="ubadge ${uc}">${c.urgency || 'routine'}</span>
+        </div>
+        <div class="dlabel">Differential Diagnoses</div>
+        <div>${diffs}</div>
+        <div class="dlabel mt3">Prognosis</div>
+        <div class="prognosis">${esc(c.prognosis)}</div>
+        <div class="dlabel mt3">Key Findings</div>
+        <p style="font-size:13.5px;color:var(--text);line-height:1.7;">${esc(c.keyFindings)}</p>
+      </div>
+    </div>
+  </div>`;
+
+        setActive(card);
+        scrollBot();
+        setTimeout(() => {
+          const f = getEl('cfill');
+          if (f) f.style.width = `${c.confidence}%`;
+        }, 80);
+        setTimeout(async () => {
+          appendStage(getEl('con-done').outerHTML);
+          setActive('');
+          S.step = 4;
+          renderPipe();
+          await runPlan();
+        }, 1600);
+      }
+
+      /* ── Stage 4: Treatment Plan ────────────────────── */
+      async function runPlan() {
+        setActive(
+          loadingCard(
+            'it',
+            '📋',
+            'Treatment Plan',
+            'Multidisciplinary Care Team',
+            'Compiling care pathway…',
+            'plan-card',
+          ),
+        );
+        scrollBot();
+
+        try {
+          const data = await post('/api/plan', {
+            symptoms: S.symptoms,
+            followup_answers: S.fqA,
+            consensus: S.consensus,
+            assessments: S.physicians.map(p => ({
+              name: p.name,
+              specialty: p.specialty,
+              assessment: p.assessment,
+            })),
+          });
+          S.plan = data.plan;
+          showPlan(data.plan);
+        } catch (e) {
+          showErr(`Plan agent error: ${e.message}`);
+          setActive('');
+          S.step = 5;
+          renderPipe();
+          await runMessage();
+        }
+      }
+
+      function showExpertSelection(displayText, experts) {
+        const expertCards = experts
+          .map(
+            e => `
+    <div class="pcard">
+      <div class="phead">
+        <div class="pav avt">${e.initials}</div>
+        <div>
+          <div class="pname">${e.name}</div>
+          <div class="pspec">${e.specialty}</div>
+        </div>
+      </div>
+    </div>
+  `,
+          )
+          .join('');
+
+        const card = `<div class="scard">
+    <div class="shead">
+      <div class="sicon ib">👥</div>
+      <div><div class="stitle">Deliberation Expert Selection</div><div class="ssub">Convening selected specialists…</div></div>
+      <div class="sstat"><div class="sindic done"></div><span>Selected — starting council</span></div>
+    </div>
+    <div class="sbody">
+      <div style="margin-bottom:20px;line-height:1.8;">
+        ${renderMarkdown(displayText)}
+      </div>
+      <div class="cgrid">
+        ${expertCards}
+      </div>
+    </div>
+  </div>`;
+
+        setActive(card);
+        scrollBot();
+      }
+
+      function parseSections(text) {
+        const out = {};
+        let cur = null;
+        for (const line of text.split('\n')) {
+          const m = line.trim().match(/^##\s+(.+)/);
+          if (m) {
+            cur = m[1].trim().toUpperCase();
+            out[cur] = '';
+          } else if (cur) out[cur] += (out[cur] ? '\n' : '') + line;
+        }
+        return out;
+      }
+
+      function showPlan(planText) {
+        const secs = parseSections(planText);
+        let secHtml = '';
+        for (const s of PLAN_KEYS) {
+          const body = secs[s.k] || secs[s.l.toUpperCase()] || '';
+          if (!body.trim()) continue;
+          secHtml += `<div class="psec">
+      <div class="pshead ${s.c}">${s.i} ${s.l}</div>
+      <div class="psbody">${renderMarkdown(body.trim())}</div>
+    </div>`;
+        }
+        if (!secHtml)
+          secHtml = `<div class="psec"><div class="psbody">${renderMarkdown(planText)}</div></div>`;
+
+        const card = `<div class="scard" id="plan-done">
+    <div class="shead">
+      <div class="sicon it">📋</div>
+      <div><div class="stitle">Treatment Plan</div><div class="ssub">Multidisciplinary Care Team</div></div>
+      <div class="sstat"><div class="sindic done"></div><span>Plan complete</span></div>
+    </div>
+    <div class="sbody"><div class="psections">${secHtml}</div></div>
+  </div>`;
+
+        setActive(card);
+        scrollBot();
+        setTimeout(async () => {
+          appendStage(getEl('plan-done').outerHTML);
+          setActive('');
+          S.step = 5;
+          renderPipe();
+          await runMessage();
+        }, 900);
+      }
+
+      /* ── Stage 5: Patient Message ───────────────────── */
+      async function runMessage() {
+        setActive(
+          loadingCard(
+            'ig',
+            '✉️',
+            'Patient Communication',
+            'Validation Agent — Composing final message',
+            'Validating & composing…',
+            'msg-card',
+          ),
+        );
+        scrollBot();
+
+        try {
+          const data = await post('/api/message', {
+            symptoms: S.symptoms,
+            consensus: S.consensus,
+            plan: S.plan,
+          });
+          S.message = data.message;
+          showMessage(data.message);
+        } catch (e) {
+          showErr(`Messaging agent error: ${e.message}`);
+        }
+      }
+
+      function showMessage(msg) {
+        setActive(`<div class="scard">
+    <div class="shead">
+      <div class="sicon ig">✉️</div>
+      <div><div class="stitle">Patient Communication</div><div class="ssub">Validation Agent — Reviewed & Approved</div></div>
+      <div class="sstat"><div class="sindic done"></div><span>Validated</span></div>
+    </div>
+    <div class="sbody">
+      <div class="msgwrap">
+        <div class="msghdr"><div class="msgbadge">✓ Patient Message · AI Review Board Validated</div></div>
+        <div class="msgbody">${renderMarkdown(msg)}</div>
+      </div>
+      <div class="msgbtns">
+        <button class="btn bghost" onclick="startNew()">+ New Assessment</button>
+        <button class="btn bprim" id="copy-btn" onclick="copyMsg()">Copy Message</button>
+      </div>
+      <div class="followup-panel">
+        <div class="fuh">Further questions</div>
+        <p class="fusub">Ask about the outcome, or add prior test results and question how they fit with the council&apos;s conclusions.</p>
+        <label class="fulab" for="fu-prior">Prior diagnostics (optional)</label>
+        <textarea id="fu-prior" class="fu-ta" rows="3" placeholder="e.g. MRI lumbar 2024: mild bulge; HbA1c 6.1%; prior diagnosis of …"></textarea>
+        <label class="fulab" for="fu-q">Your question</label>
+        <textarea id="fu-q" class="fu-ta" rows="3" placeholder="e.g. Does this change if my echo was normal last year?"></textarea>
+        <button type="button" class="btn bprim" id="fu-btn" onclick="submitPatientFollowUp()">Ask the council</button>
+        <div id="fu-thread"></div>
+      </div>
+    </div>
+  </div>`);
+        S.step = 6;
+        renderPipe();
+        scrollBot();
+      }
+
+      async function submitPatientFollowUp() {
+        const qEl = getEl('fu-q');
+        const btn = getEl('fu-btn');
+        const thread = getEl('fu-thread');
+        const q = qEl?.value?.trim();
+        if (!q || q.length < 3) return;
+        if (!S.consensus || !S.plan || !S.message) {
+          if (thread)
+            thread.insertAdjacentHTML(
+              'beforeend',
+              `<div class="errbox">Session context missing — start a new assessment.</div>`,
+            );
+          return;
+        }
+        btn.disabled = true;
+        const prev = btn.textContent;
+        btn.textContent = 'Thinking…';
+        try {
+          const data = await post('/api/message/followup', {
+            question: q,
+            prior_diagnostics: getEl('fu-prior')?.value?.trim() || '',
+            symptoms: S.symptoms,
+            followup_answers: S.fqA,
+            consensus: S.consensus,
+            plan: S.plan,
+            patient_message: S.message,
+          });
+          qEl.value = '';
+          if (thread) {
+            thread.insertAdjacentHTML(
+              'beforeend',
+              `<div class="fu-pair">
+        <div class="fu-qlabel">Your question</div>
+        <div class="fu-qtext">${esc(q)}</div>
+        <div class="fu-qlabel">Council reply</div>
+        <div class="fu-atext">${renderMarkdown(data.reply)}</div>
+      </div>`,
+            );
+          }
+          scrollBot();
+        } catch (e) {
+          if (thread)
+            thread.insertAdjacentHTML(
+              'beforeend',
+              `<div class="errbox">${esc(e.message)}</div>`,
+            );
+        } finally {
+          btn.disabled = false;
+          btn.textContent = prev;
+        }
+      }
+
+      function copyMsg() {
+        navigator.clipboard.writeText(S.message).then(() => {
+          const b = getEl('copy-btn');
+          if (b) {
+            b.textContent = '✓ Copied!';
+            setTimeout(() => (b.textContent = 'Copy Message'), 2500);
+          }
+        });
+      }
+
+      function startNew() {
+        Object.assign(S, {
+          step: 0,
+          symptoms: '',
+          fqQ: '',
+          fqA: '',
+          physicians: [],
+          council_roster: [],
+          deliberation_experts: [],
+          deliberation_display: '',
+          deliberation_case_summary: '',
+          deliberation_focus_areas: [],
+          deliberation_reason: '',
+          research: [],
+          consensus: null,
+          plan: '',
+          message: '',
+        });
+        getEl('stages').innerHTML = '';
+        setActive('');
+        showIntake();
+      }
+
+      /* ── Boot ───────────────────────────────────────── */
+      checkServer();
+      showIntake();
+    </script>
+  </body>
+</html>
