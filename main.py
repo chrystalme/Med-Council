@@ -76,7 +76,7 @@ _council_model_provider: MultiProvider | None = None
 # Vercel's filesystem is read-only except /tmp; locally, use the project dir.
 _ON_VERCEL = bool(os.environ.get("VERCEL"))
 _DB_PATH = Path("/tmp/feedback.db") if _ON_VERCEL else Path(__file__).resolve().parent / "feedback.db"
-FEEDBACK_SECRET = os.environ.get("FEEDBACK_SECRET", secrets.token_urlsafe(32))
+FEEDBACK_SECRET = os.environ.get("FEEDBACK_SECRET") or os.environ.get("FEEDBACK_TOKEN") or secrets.token_urlsafe(32)
 
 
 def _init_feedback_db() -> None:
