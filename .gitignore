@@ -1,0 +1,7 @@
+docs
+scripts
+.env
+.cursor
+.venv
+__pycache__/
+*.py[cod]
