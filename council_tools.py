@@ -39,8 +39,10 @@ def save_feedback(rating: str, comment: str, symptoms: str, diagnosis: str) -> s
     """Persist a feedback row to SQLite and return confirmation."""
     if rating not in ("up", "down"):
         return "ERROR: rating must be 'up' or 'down'."
+    import os
     from pathlib import Path
-    db_path = Path(__file__).resolve().parent / "feedback.db"
+    on_vercel = bool(os.environ.get("VERCEL"))
+    db_path = Path("/tmp/feedback.db") if on_vercel else Path(__file__).resolve().parent / "feedback.db"
     con = sqlite3.connect(str(db_path))
     con.execute(
         "INSERT INTO feedback (rating, comment, symptoms, diagnosis, created_at) VALUES (?, ?, ?, ?, ?)",
