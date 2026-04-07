@@ -896,7 +896,7 @@
         </p>
         <div class="server-badge">
           <div class="server-dot" id="srv-dot"></div>
-          <span id="srv-txt">Connecting to localhost:8000…</span>
+          <span id="srv-txt">Checking backend…</span>
         </div>
       </div>
       <div class="pipe" id="pipe"></div>
@@ -911,7 +911,12 @@
 
     <script>
       /* ── Config ─────────────────────────────────────── */
-      const API = 'http://localhost:8000';
+      // Same-origin on Vercel / `vercel dev`; file:// opens against local uvicorn :8000
+      const API =
+        window.location.protocol === 'file:' ? 'http://localhost:8000' : '';
+      function apiLabel() {
+        return API ? API.replace(/^https?:\/\//, '') : window.location.origin;
+      }
 
       /* ── State ──────────────────────────────────────── */
       const S = {
@@ -957,27 +962,42 @@
       async function post(path, body) {
         const res = await fetch(`${API}${path}`, {
           method: 'POST',
+          credentials: 'include',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify(body),
         });
-        const json = await res.json();
-        if (!res.ok) throw new Error(json.detail || `HTTP ${res.status}`);
+        const text = await res.text();
+        let json;
+        try { json = JSON.parse(text); } catch {
+          if (!res.ok) throw new Error(text || `HTTP ${res.status}`);
+          throw new Error('Invalid JSON response from server');
+        }
+        if (!res.ok) {
+          const d = json.detail;
+          const msg = typeof d === 'object' && d !== null ? (d.message || JSON.stringify(d)) : (d || `HTTP ${res.status}`);
+          const errorType = typeof d === 'object' && d !== null ? d.error : undefined;
+          const err = new Error(msg);
+          err.errorType = errorType;
+          err._detail = d;
+          throw err;
+        }
         return json;
       }
 
       /* ── Server health check ────────────────────────── */
       async function checkServer() {
         try {
-          const r = await fetch(`${API}/health`);
+          const r = await fetch(`${API}/health`, { credentials: 'include' });
           if (r.ok) {
             getEl('srv-dot').className = 'server-dot ok';
-            getEl('srv-txt').textContent = 'Backend connected · localhost:8000';
+            getEl('srv-txt').textContent = 'Backend connected · ' + apiLabel();
             return true;
           }
         } catch {}
         getEl('srv-dot').className = 'server-dot';
-        getEl('srv-txt').textContent =
-          'Backend offline — start with: uvicorn main:app --reload';
+        getEl('srv-txt').textContent = API
+          ? 'Backend offline — start with: uvicorn main:app --reload --port 8000'
+          : 'Backend offline — check Vercel env (OPENROUTER_API_KEY, OPENAI_API_KEY) and function logs.';
         return false;
       }
 
@@ -1157,9 +1177,9 @@
   </div>`;
       }
 
-      function showErr(msg) {
+      function showErr(msg, position = 'beforeend') {
         const box = `<div class="errbox">⚠ ${esc(msg)}</div>`;
-        getEl('active').insertAdjacentHTML('beforeend', box);
+        getEl('active').insertAdjacentHTML(position, box);
       }
 
       /* ── Stage 0: Intake ────────────────────────────── */
@@ -1219,7 +1239,18 @@
           S.fqQ = data.questions;
           showFollowup(data.questions);
         } catch (e) {
-          showErr(`Intake agent error: ${e.message}`);
+          const isGuardrail = e.errorType === 'non_medical_input'
+            || (e.message && e.message.includes('medical questions only'));
+          if (isGuardrail) {
+            S.symptoms = '';
+            S.step = 0;
+            getEl('stages').innerHTML = '';
+            setActive('');
+            showIntake();
+            showErr(e.message, 'afterbegin');
+          } else {
+            showErr(`Intake agent error: ${e.message}`);
+          }
         }
       }
 
@@ -1328,7 +1359,7 @@
         }
         try {
           if (!roster.length) {
-            const r = await fetch(`${API}/agents`);
+            const r = await fetch(`${API}/agents`, { credentials: 'include' });
             const d = await r.json();
             roster = d.physicians;
           }

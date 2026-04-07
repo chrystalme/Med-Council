@@ -66,9 +66,25 @@ On startup:
 
 ### 4 — Open frontend
 
-```bash
-open frontend.html
-```
+With **`uvicorn main:app --port 8000`**, open **`http://127.0.0.1:8000/`** (the UI is served by FastAPI from `static/index.html`).
+
+Alternatively open `static/index.html` from disk (`file://`); it still calls `http://localhost:8000` for the API. Or run **`vercel dev`** for the same origin as production.
+
+## Deploy to Vercel
+
+1. Connect this repository in the [Vercel dashboard](https://vercel.com/new) or deploy from the CLI (`npm i -g vercel` then `vercel` / `vercel --prod` in the project root). See [FastAPI on Vercel](https://vercel.com/docs/frameworks/backend/fastapi).
+
+2. Set **Environment Variables** on the project: `OPENROUTER_API_KEY`, `OPENAI_API_KEY` (same as local `.env`).
+
+3. **Entrypoint:** root [`app.py`](./app.py) re-exports the FastAPI `app` from [`main.py`](./main.py). **UI:** [`static/index.html`](./static/index.html) is returned by **`GET /`** from the same serverless function as the API (so routing stays consistent). Use your deployment URL root (e.g. `https://your-project.vercel.app/`), not a separate static path.
+
+4. Agent runs can be long; watch function duration and logs if requests time out ([functions limits](https://vercel.com/docs/functions/limitations)).
+
+### Troubleshooting (Vercel)
+
+- **`{"detail":"Not Found"}` in the app** — In the browser **Network** tab, confirm failing requests go to **your** deployment host (same tab URL), use relative paths (`/health`, `/api/…`), and return **200** for `GET /health`. If previews use **Deployment Protection** ([docs](https://vercel.com/docs/deployment-protection)), unauthenticated API calls can fail; use **relative** `fetch` URLs and `credentials: 'include'` (already set in the UI), or turn protection off for the environment you are testing.
+
+- **Cookie `_vercel_sso_nonce` rejected (cross-site / SameSite)** — Usually from **Vercel Authentication** or viewing the deployment in a **cross-site** context. It does not mean your FastAPI code set that cookie. Testing in a normal top-level window on the deployment URL avoids most noise; you can ignore the warning if the app works.
 
 ## Files changed from v2
 

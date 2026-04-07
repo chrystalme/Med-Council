@@ -14,6 +14,13 @@ from typing import Annotated
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
 
+class MedicalTopicCheck(BaseModel):
+    """Output of the medical topic guardrail classifier."""
+
+    is_medical: bool = Field(description="True if the input describes a medical/health concern.")
+    reasoning: str = Field(description="Brief explanation of the classification.")
+
+
 class PatientSymptomsIn(BaseModel):
     """Structured intake request body (mirrors API; optional use in docs/tests)."""
 

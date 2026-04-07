@@ -11,11 +11,12 @@ ModelBehaviorError). main.py parses into `IntakeFollowupOut` via `parse_intake_f
 
 from __future__ import annotations
 
-from agents import Agent
+from agents import Agent, InputGuardrail, GuardrailFunctionOutput, RunContextWrapper
+from agents.run import Runner
 
 from council_handoffs import build_specialist_handoffs, build_stage_router_handoffs
 from council_registry import ALL_SPECIALIST_IDS, MODEL, SPECIALIST_META, specialist_list_for_prompts
-from council_schemas import IntakeFollowupOut
+from council_schemas import IntakeFollowupOut, MedicalTopicCheck
 from council_tools import COUNCIL_COORDINATOR_TOOLS
 
 # Re-export registry symbols for main.py and other importers
@@ -32,6 +33,7 @@ __all__ = [
     "deliberation_selector_agent",
     "intake_agent",
     "followup_qa_agent",
+    "medical_topic_guardrail",
     "message_agent",
     "plan_agent",
     "research_agent",
@@ -41,12 +43,105 @@ __all__ = [
 _specialist_list = specialist_list_for_prompts()
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Guardrail: Medical Topic Check
+# ─────────────────────────────────────────────────────────────────────────────
+
+_medical_topic_agent = Agent(
+    name="Medical Topic Classifier",
+    model=MODEL,
+    instructions="""You are a strict topic classifier for a medical intake system.
+
+Classify the user's message as MEDICAL or NOT MEDICAL.
+
+MEDICAL means the user describes: physical symptoms, pain, injuries, illness, mental health concerns,
+medication questions, wellness/fitness health questions, or anything a doctor would address.
+
+NOT MEDICAL means the user is asking about: cooking, recipes, sports, homework, math, programming,
+weather, geography, trivia, politics, entertainment, travel, or any topic unrelated to human health.
+
+IMPORTANT: Do NOT reinterpret non-medical topics as medical. "How do I make pasta" is a cooking
+question, NOT a medical question about hand tremors. "What is the capital of France" is trivia,
+NOT a health concern. Judge the user's ACTUAL intent, not a hypothetical medical angle.
+
+You MUST respond with ONLY a JSON object — no markdown fences, no other text:
+{"is_medical": true, "reasoning": "one sentence explanation"}
+or
+{"is_medical": false, "reasoning": "one sentence explanation"}""",
+)
+
+
+def _parse_medical_check(raw: str) -> MedicalTopicCheck:
+    """Parse classifier output into MedicalTopicCheck, defaulting to medical=True on failure."""
+    import json as _json
+    import re as _re
+    text = (raw or "").strip()
+    # Try JSON parse
+    clean = _re.sub(r"```(?:json)?\s*", "", text).replace("```", "").strip()
+    for candidate in (clean, text):
+        try:
+            data = _json.loads(candidate)
+            if isinstance(data, dict):
+                return MedicalTopicCheck(
+                    is_medical=bool(data.get("is_medical", True)),
+                    reasoning=str(data.get("reasoning", "")),
+                )
+        except (_json.JSONDecodeError, Exception):
+            pass
+        match = _re.search(r"\{[\s\S]*\}", candidate)
+        if match:
+            try:
+                data = _json.loads(match.group(0))
+                if isinstance(data, dict):
+                    return MedicalTopicCheck(
+                        is_medical=bool(data.get("is_medical", True)),
+                        reasoning=str(data.get("reasoning", "")),
+                    )
+            except (_json.JSONDecodeError, Exception):
+                pass
+    # Keyword fallback: look for explicit "not medical" / "is_medical: false" in prose
+    lower = text.lower()
+    if "is_medical" in lower and ("false" in lower or "no" in lower):
+        return MedicalTopicCheck(is_medical=False, reasoning=text[:200])
+    # Default to medical (don't block legitimate patients on parse failure)
+    return MedicalTopicCheck(is_medical=True, reasoning="Could not parse classifier output; defaulting to medical.")
+
+
+async def _check_medical_topic(
+    ctx: RunContextWrapper, agent: Agent, input: str | list,
+) -> GuardrailFunctionOutput:
+    """InputGuardrail function: runs the classifier and trips if non-medical."""
+    from agents.run_config import RunConfig
+    from agents.models.multi_provider import MultiProvider
+    text = input if isinstance(input, str) else str(input)
+    # Use the same model_provider setup as the main app
+    import main as _main
+    rc = RunConfig(
+        model_provider=_main._council_model_provider or MultiProvider(),
+        trace_include_sensitive_data=True,
+    )
+    result = await Runner.run(_medical_topic_agent, text, run_config=rc)
+    check = _parse_medical_check(result.final_output if isinstance(result.final_output, str) else str(result.final_output))
+    return GuardrailFunctionOutput(
+        output_info={"is_medical": check.is_medical, "reasoning": check.reasoning},
+        tripwire_triggered=not check.is_medical,
+    )
+
+
+medical_topic_guardrail = InputGuardrail(
+    guardrail_function=_check_medical_topic,
+    name="medical_topic_check",
+    run_in_parallel=False,
+)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Agent: Intake Coordinator
 # ─────────────────────────────────────────────────────────────────────────────
 
 intake_agent = Agent(
     name="Intake Coordinator",
     model=MODEL,
+    input_guardrails=[medical_topic_guardrail],
     instructions="""You are a warm, professional medical intake coordinator at a multidisciplinary clinic.
 Given the patient's self-reported symptoms, produce exactly four follow-up questions.
 

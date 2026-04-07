@@ -7,8 +7,10 @@ Environment variables required:
     OPENROUTER_API_KEY   — for model inference (https://openrouter.ai/keys)
     OPENAI_API_KEY       — for tracing export only  (https://platform.openai.com/api-keys)
 
-Run:
+Run locally:
     uvicorn main:app --reload --port 8000
+
+Deploy (Vercel): root `app.py` re-exports this module; UI is served from `static/index.html` via GET `/` so HTML and API share one ASGI app (avoids CDN vs function routing issues).
 """
 
 from __future__ import annotations
@@ -16,6 +18,7 @@ from __future__ import annotations
 import json
 import os
 import re
+from pathlib import Path
 from contextlib import asynccontextmanager, contextmanager
 from typing import Annotated, Any
 from dotenv import load_dotenv
@@ -23,11 +26,13 @@ from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import FileResponse, RedirectResponse
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, field_validator
 
 from agents import (
     Agent,
+    InputGuardrailTripwireTriggered,
     set_default_openai_api,
     set_default_openai_client,
     set_tracing_export_api_key,
@@ -35,7 +40,7 @@ from agents import (
 from agents.models.multi_provider import MultiProvider
 from agents.run import Runner
 from agents.run_config import RunConfig
-from agents.tracing import trace as workflow_trace
+from agents.tracing import custom_span, trace as workflow_trace
 from agents.tracing.setup import get_trace_provider
 
 from council_schemas import (
@@ -65,6 +70,12 @@ load_dotenv(override=True)
 _council_model_provider: MultiProvider | None = None
 
 
+def _truncate(text: str, max_len: int = 120) -> str:
+    """Truncate text for trace metadata (keeps traces searchable without bloating)."""
+    t = (text or "").strip()
+    return t[:max_len] + "…" if len(t) > max_len else t
+
+
 def _flush_sdk_traces() -> None:
     """Push queued traces immediately (BatchTraceProcessor defaults to ~5s delay)."""
     try:
@@ -74,9 +85,15 @@ def _flush_sdk_traces() -> None:
 
 
 @contextmanager
-def traced_workflow(name: str):
-    """OpenAI Agents SDK workflow trace + immediate export flush for the dashboard."""
-    with workflow_trace(name):
+def traced_workflow(name: str, *, group_id: str | None = None, metadata: dict | None = None):
+    """OpenAI Agents SDK workflow trace + immediate export flush for the dashboard.
+
+    Args:
+        name: Workflow name shown in the trace dashboard.
+        group_id: Optional session/conversation ID to link related traces.
+        metadata: Arbitrary key-value pairs attached to the trace for filtering/search.
+    """
+    with workflow_trace(name, group_id=group_id, metadata=metadata or {}):
         yield
     _flush_sdk_traces()
 
@@ -122,7 +139,14 @@ async def lifespan(app: FastAPI):
     yield
 
 
-app = FastAPI(title="MedAI Council", version="3.0.0", lifespan=lifespan)
+app = FastAPI(
+    title="MedAI Council",
+    version="3.0.0",
+    lifespan=lifespan,
+    redirect_slashes=False,
+)
+
+_UI_INDEX = Path(__file__).resolve().parent / "static" / "index.html"
 
 app.add_middleware(
     CORSMiddleware,
@@ -138,7 +162,10 @@ app.add_middleware(
 
 async def run_agent_raw(agent: Agent, prompt: str) -> Any:
     """Run an agent and return `final_output` (str or Pydantic model when `output_type` is set)."""
-    rc = RunConfig(model_provider=_council_model_provider) if _council_model_provider else RunConfig()
+    rc = RunConfig(
+        model_provider=_council_model_provider or MultiProvider(),
+        trace_include_sensitive_data=True,
+    )
     result = await Runner.run(agent, prompt, run_config=rc)
     return result.final_output
 
@@ -351,6 +378,20 @@ class PatientFollowUpIn(BaseModel):
 #  Utility endpoints
 # ─────────────────────────────────────────────────────────────────────────────
 
+
+@app.get("/")
+async def serve_ui():
+    """Single-page UI (Vercel: same function as API — avoids static `public/` taking precedence)."""
+    if _UI_INDEX.is_file():
+        return FileResponse(_UI_INDEX, media_type="text/html; charset=utf-8")
+    raise HTTPException(status_code=404, detail="UI not found (missing static/index.html)")
+
+
+@app.get("/index.html", include_in_schema=False)
+async def serve_ui_index_alias():
+    return RedirectResponse("/", status_code=307)
+
+
 @app.get("/health")
 def health():
     return {
@@ -391,11 +432,28 @@ def list_agents():
 
 @app.post("/api/intake/followup")
 async def intake_followup(req: SymptomsIn):
-    with traced_workflow("Intake Follow-up Questions"):
-        raw_text = await run_agent(
-            intake_agent,
-            f"Patient self-reports: {req.symptoms}",
-        )
+    try:
+        with traced_workflow(
+            "Intake Follow-up Questions",
+            metadata={"stage": "1-intake", "symptoms": _truncate(req.symptoms)},
+        ):
+            raw_text = await run_agent(
+                intake_agent,
+                f"Patient self-reports: {req.symptoms}",
+            )
+    except InputGuardrailTripwireTriggered as e:
+        info = e.guardrail_result.output.output_info if e.guardrail_result.output else {}
+        raise HTTPException(
+            status_code=422,
+            detail={
+                "error": "non_medical_input",
+                "message": (
+                    "This service is designed for medical questions only. "
+                    "Please describe a health concern, symptom, or medical situation."
+                ),
+                "reasoning": info.get("reasoning", ""),
+            },
+        ) from e
     try:
         return {"questions": _format_intake_questions_for_api(raw_text)}
     except ValueError as e:
@@ -412,7 +470,10 @@ async def triage(req: TriageIn):
         f"Patient symptoms: {req.symptoms}\n\n"
         f"Patient follow-up responses: {req.followup_answers}"
     )
-    with traced_workflow("Triage: Specialist Selection"):
+    with traced_workflow(
+        "Triage: Specialist Selection",
+        metadata={"stage": "2-triage", "symptoms": _truncate(req.symptoms)},
+    ):
         raw = await run_agent(triage_agent, prompt)
 
     try:
@@ -447,7 +508,10 @@ async def select_deliberation_experts(req: TriageIn):
         f"Patient symptoms: {req.symptoms}\n\n"
         f"Patient follow-up responses: {req.followup_answers}"
     )
-    with traced_workflow("Expert Selection for Deliberation"):
+    with traced_workflow(
+        "Expert Selection for Deliberation",
+        metadata={"stage": "2b-deliberation-select", "symptoms": _truncate(req.symptoms)},
+    ):
         raw = await run_agent(deliberation_selector_agent, prompt)
 
     try:
@@ -547,7 +611,16 @@ async def council_specialist(req: SpecialistIn):
     )
 
     specialist_name = SPECIALIST_META[req.specialist_id]["name"]
-    with traced_workflow(f"Specialist Assessment: {specialist_name}"):
+    with traced_workflow(
+        f"Specialist Assessment: {specialist_name}",
+        metadata={
+            "stage": "3-council",
+            "specialist_id": req.specialist_id,
+            "specialist_name": specialist_name,
+            "prior_assessment_count": len(req.prior_assessments),
+            "symptoms": _truncate(req.symptoms),
+        },
+    ):
         assessment = await run_agent(SPECIALIST_AGENTS[req.specialist_id], prompt)
     return {
         "specialist": {"id": req.specialist_id, **SPECIALIST_META[req.specialist_id]},
@@ -580,7 +653,16 @@ async def council_physician(req: PhysicianIn):
     )
 
     specialist_name = SPECIALIST_META[req.physician_id]["name"]
-    with traced_workflow(f"Specialist Assessment: {specialist_name}"):
+    with traced_workflow(
+        f"Specialist Assessment: {specialist_name}",
+        metadata={
+            "stage": "3-council",
+            "specialist_id": req.physician_id,
+            "specialist_name": specialist_name,
+            "prior_assessment_count": len(req.prior_assessments),
+            "symptoms": _truncate(req.symptoms),
+        },
+    ):
         assessment = await run_agent(SPECIALIST_AGENTS[req.physician_id], prompt)
     return {
         "specialist": {"id": req.physician_id, **SPECIALIST_META[req.physician_id]},
@@ -602,17 +684,26 @@ async def research(req: ResearchIn):
         f"Follow-up responses: {req.followup_answers}\n\n"
         f"Team assessments:\n{assessments_text}"
     )
-    with traced_workflow("Research: Evidence-Based Paper Selection"):
+    with traced_workflow(
+        "Research: Evidence-Based Paper Selection",
+        metadata={
+            "stage": "4-research",
+            "assessment_count": len(req.assessments),
+            "symptoms": _truncate(req.symptoms),
+        },
+    ):
         raw = await run_agent(research_agent, prompt)
 
-    papers, parse_warning = parse_research_papers(raw)
+    with custom_span("parse_research_papers", data={"source": "model_output"}):
+        papers, parse_warning = parse_research_papers(raw)
 
     # Failsafe: if the model didn't return a usable papers array (or produced narrative-only output),
     # fetch real PubMed links based on the case text so the UI always has actionable references.
     has_any_links = any(bool((p or {}).get("url")) for p in (papers or []))
     if not has_any_links:
-        pubmed_term = f"{req.symptoms}\n{req.followup_answers}\n{assessments_text}"
-        pubmed_papers = _pubmed_search_papers(pubmed_term, retmax=4)
+        with custom_span("pubmed_fallback_search", data={"reason": "no_urls_in_model_output"}):
+            pubmed_term = f"{req.symptoms}\n{req.followup_answers}\n{assessments_text}"
+            pubmed_papers = _pubmed_search_papers(pubmed_term, retmax=4)
         if pubmed_papers:
             papers = pubmed_papers
             parse_warning = (
@@ -642,7 +733,15 @@ async def consensus(req: ConsensusIn):
         f"Specialist assessments:\n{assessments_text}\n\n"
         f"Supporting research:\n{research_text}"
     )
-    with traced_workflow("Consensus: Integrating Multidisciplinary Assessment"):
+    with traced_workflow(
+        "Consensus: Integrating Multidisciplinary Assessment",
+        metadata={
+            "stage": "5-consensus",
+            "assessment_count": len(req.assessments),
+            "research_paper_count": len(req.research),
+            "symptoms": _truncate(req.symptoms),
+        },
+    ):
         raw = await run_agent(consensus_agent, prompt)
 
     try:
@@ -668,7 +767,14 @@ async def plan(req: PlanIn):
         f"Follow-up responses: {req.followup_answers}\n\n"
         f"Specialist findings:\n{assessments_text}"
     )
-    with traced_workflow("Treatment Plan: Multi-Specialty Coordination"):
+    with traced_workflow(
+        "Treatment Plan: Multi-Specialty Coordination",
+        metadata={
+            "stage": "6-plan",
+            "assessment_count": len(req.assessments),
+            "symptoms": _truncate(req.symptoms),
+        },
+    ):
         plan_text = await run_agent(plan_agent, prompt)
     return {"plan": plan_text}
 
@@ -688,7 +794,15 @@ async def patient_message(req: MessageIn):
         f"Treatment plan:\n{req.plan}\n\n"
         f"Original patient symptoms: {req.symptoms}"
     )
-    with traced_workflow("Patient Communication: Empathetic Summary"):
+    with traced_workflow(
+        "Patient Communication: Empathetic Summary",
+        metadata={
+            "stage": "7-message",
+            "diagnosis": _truncate(str(req.consensus.get("primaryDiagnosis", ""))),
+            "urgency": req.consensus.get("urgency", "unknown"),
+            "symptoms": _truncate(req.symptoms),
+        },
+    ):
         message = await run_agent(message_agent, prompt)
     return {"message": message}
 
@@ -708,6 +822,14 @@ async def patient_message_followup(req: PatientFollowUpIn):
         f"Patient-facing message already sent:\n{req.patient_message}{prior}\n\n"
         f"---\nPatient's new question:\n{req.question}"
     )
-    with traced_workflow("Patient Follow-up Q&A"):
+    with traced_workflow(
+        "Patient Follow-up Q&A",
+        metadata={
+            "stage": "7b-followup-qa",
+            "question": _truncate(req.question),
+            "has_prior_diagnostics": bool(req.prior_diagnostics.strip()),
+            "symptoms": _truncate(req.symptoms),
+        },
+    ):
         reply = await run_agent(followup_qa_agent, prompt)
     return {"reply": reply}
