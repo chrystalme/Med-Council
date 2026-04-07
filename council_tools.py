@@ -1,8 +1,11 @@
 """
-MedAI Council — Function tools attached to coordinator agents (catalog lookup, etc.).
+MedAI Council — Function tools attached to coordinator agents (catalog lookup, feedback, etc.).
 """
 
 from __future__ import annotations
+
+import sqlite3
+from datetime import datetime, timezone
 
 from agents import function_tool
 
@@ -25,5 +28,32 @@ def get_specialist_catalog() -> str:
     return "specialist_id\tspecialty\tdescription\n" + "\n".join(lines)
 
 
+@function_tool(
+    name_override="save_feedback",
+    description_override=(
+        "Save patient feedback to the database. Call this exactly once with the rating, "
+        "optional comment, symptoms summary, and diagnosis. rating must be 'up' or 'down'."
+    ),
+)
+def save_feedback(rating: str, comment: str, symptoms: str, diagnosis: str) -> str:
+    """Persist a feedback row to SQLite and return confirmation."""
+    if rating not in ("up", "down"):
+        return "ERROR: rating must be 'up' or 'down'."
+    from pathlib import Path
+    db_path = Path(__file__).resolve().parent / "feedback.db"
+    con = sqlite3.connect(str(db_path))
+    con.execute(
+        "INSERT INTO feedback (rating, comment, symptoms, diagnosis, created_at) VALUES (?, ?, ?, ?, ?)",
+        (rating, (comment or "").strip()[:2000], (symptoms or "")[:500], (diagnosis or "")[:500],
+         datetime.now(timezone.utc).isoformat()),
+    )
+    con.commit()
+    con.close()
+    return f"Feedback saved: rating={rating}"
+
+
 # Tools bundle for agents that pick specialist sets from the registry
 COUNCIL_COORDINATOR_TOOLS = [get_specialist_catalog]
+
+# Tools bundle for the feedback agent
+FEEDBACK_TOOLS = [save_feedback]

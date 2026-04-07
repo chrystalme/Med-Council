@@ -17,7 +17,7 @@ from agents.run import Runner
 from council_handoffs import build_specialist_handoffs, build_stage_router_handoffs
 from council_registry import ALL_SPECIALIST_IDS, MODEL, SPECIALIST_META, specialist_list_for_prompts
 from council_schemas import IntakeFollowupOut, MedicalTopicCheck
-from council_tools import COUNCIL_COORDINATOR_TOOLS
+from council_tools import COUNCIL_COORDINATOR_TOOLS, FEEDBACK_TOOLS
 
 # Re-export registry symbols for main.py and other importers
 __all__ = [
@@ -31,6 +31,7 @@ __all__ = [
     "consensus_agent",
     "council_router_agent",
     "deliberation_selector_agent",
+    "feedback_agent",
     "intake_agent",
     "followup_qa_agent",
     "medical_topic_guardrail",
@@ -315,6 +316,28 @@ Your job:
   visit with a licensed clinician.
 
 Length: usually 2–5 short paragraphs unless the question is very simple.""",
+)
+
+
+feedback_agent = Agent(
+    name="Feedback Coordinator",
+    model=MODEL,
+    tools=FEEDBACK_TOOLS,
+    instructions="""You are the feedback coordinator for the MedAI Council system.
+
+You receive a patient's feedback about their assessment experience. Your ONLY job is to call the
+save_feedback tool exactly once with the data provided, then confirm to the system that the feedback
+was recorded.
+
+You will receive a JSON message with: rating ("up" or "down"), comment (may be empty),
+symptoms (the patient's original symptoms), and diagnosis (the primary diagnosis given).
+
+Steps:
+1. Call the save_feedback tool with the exact values provided.
+2. After the tool confirms success, respond with ONLY this JSON (no markdown, no other text):
+   {"status": "ok", "rating": "<up or down>"}
+
+Do not add commentary, do not re-interpret the feedback, do not ask questions.""",
 )
 
 

@@ -832,6 +832,21 @@
         margin-top: 10px;
       }
 
+      /* Feedback widget */
+      .fb-wrap { margin-top:18px; padding:16px 18px; background:var(--surface); border:1px solid var(--border); border-radius:var(--rs); }
+      .fb-row { display:flex; align-items:center; gap:12px; }
+      .fb-label { font-size:13.5px; color:var(--muted); }
+      .fb-btn { background:none; border:1px solid var(--border); border-radius:var(--rs); padding:6px 14px; cursor:pointer;
+                 font-size:18px; transition:all .15s; color:var(--text); }
+      .fb-btn:hover { border-color:var(--teal); background:var(--teal-dim); }
+      .fb-btn.sel { border-color:var(--teal); background:var(--teal-dim); }
+      .fb-comment { display:none; margin-top:12px; }
+      .fb-comment.show { display:block; }
+      .fb-comment textarea { width:100%; background:var(--card); color:var(--text); border:1px solid var(--border);
+                              border-radius:var(--rs); padding:10px; font-family:inherit; font-size:13.5px; resize:vertical; }
+      .fb-submit { margin-top:10px; }
+      .fb-thanks { color:var(--teal); font-size:13.5px; margin-top:10px; display:none; }
+
       .ldots {
         display: flex;
         align-items: center;
@@ -1795,6 +1810,18 @@
         <button class="btn bghost" onclick="startNew()">+ New Assessment</button>
         <button class="btn bprim" id="copy-btn" onclick="copyMsg()">Copy Message</button>
       </div>
+      <div class="fb-wrap" id="fb-wrap">
+        <div class="fb-row">
+          <span class="fb-label">Was this assessment helpful?</span>
+          <button class="fb-btn" id="fb-up" onclick="rateFeedback('up')">&#128077;</button>
+          <button class="fb-btn" id="fb-down" onclick="rateFeedback('down')">&#128078;</button>
+        </div>
+        <div class="fb-comment" id="fb-comment">
+          <textarea id="fb-text" rows="2" placeholder="Optional: tell us more…"></textarea>
+          <button class="btn bprim fb-submit" onclick="sendFeedback()">Send feedback</button>
+        </div>
+        <div class="fb-thanks" id="fb-thanks">Thank you for your feedback!</div>
+      </div>
       <div class="followup-panel">
         <div class="fuh">Further questions</div>
         <p class="fusub">Ask about the outcome, or add prior test results and question how they fit with the council&apos;s conclusions.</p>
@@ -1878,6 +1905,32 @@
             setTimeout(() => (b.textContent = 'Copy Message'), 2500);
           }
         });
+      }
+
+      /* ── Feedback ─────────────────────────────────── */
+      let _fbRating = null;
+      function rateFeedback(r) {
+        _fbRating = r;
+        getEl('fb-up').classList.toggle('sel', r === 'up');
+        getEl('fb-down').classList.toggle('sel', r === 'down');
+        getEl('fb-comment').classList.add('show');
+      }
+      async function sendFeedback() {
+        if (!_fbRating) return;
+        try {
+          await post('/api/feedback', {
+            rating: _fbRating,
+            comment: (getEl('fb-text')?.value || '').trim(),
+            symptoms: S.symptoms || '',
+            diagnosis: S.consensus?.primaryDiagnosis || '',
+          });
+        } catch {}
+        getEl('fb-comment').classList.remove('show');
+        getEl('fb-up').style.display = 'none';
+        getEl('fb-down').style.display = 'none';
+        const lbl = getEl('fb-wrap')?.querySelector('.fb-label');
+        if (lbl) lbl.style.display = 'none';
+        getEl('fb-thanks').style.display = 'block';
       }
 
       function startNew() {
