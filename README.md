@@ -101,6 +101,20 @@ set_default_openai_api("chat_completions") # required: use /chat/completions not
 `set_tracing_api_key()` takes a **separate** OpenAI key and sends trace data to
 `platform.openai.com/traces` regardless of which provider handles inference.
 
+## Pipeline walkthrough (GIF)
+
+An animated overview of UI stages and API routes is at **`docs/medai-council-pipeline.gif`** (~8 frames, ~3.2s each).
+
+**Demo UI walkthrough (hypothetical patient):** `docs/medai-council-demo-ui.gif` — mock screens in the app’s dark theme with synthetic symptoms, follow-ups, council, research, diagnosis, plan, and message + follow-up panel.
+
+Regenerate (requires Pillow):
+
+```bash
+uv pip install pillow --python .venv/bin/python
+.venv/bin/python scripts/generate_pipeline_gif.py
+.venv/bin/python scripts/generate_demo_ui_gif.py
+```
+
 ---
 
 ⚠ Demonstration only. AI outputs must not substitute for licensed medical advice.
