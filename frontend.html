@@ -444,6 +444,10 @@
         border-radius: var(--rs);
         padding: 13px 15px;
       }
+      .paper .plink {
+        display: inline-block;
+        margin-top: 8px;
+      }
       .ptitle {
         font-weight: 500;
         font-size: 14px;
@@ -664,6 +668,54 @@
         color: var(--bright);
         white-space: pre-wrap;
       }
+
+      /* Markdown blocks (plan, message, Q&A) */
+      .msgbody h3,
+      .psbody h3,
+      .fu-atext h3 {
+        font-size: 13px;
+        letter-spacing: 0.08em;
+        text-transform: uppercase;
+        color: var(--muted);
+        margin: 14px 0 8px;
+        font-weight: 500;
+      }
+      .msgbody p,
+      .psbody p,
+      .fu-atext p {
+        margin: 0 0 10px;
+      }
+      .msgbody ul,
+      .psbody ul,
+      .fu-atext ul,
+      .msgbody ol,
+      .psbody ol,
+      .fu-atext ol {
+        margin: 6px 0 12px 18px;
+        padding: 0;
+      }
+      .msgbody li,
+      .psbody li,
+      .fu-atext li {
+        margin: 4px 0;
+      }
+      .msgbody pre,
+      .psbody pre,
+      .fu-atext pre {
+        background: rgba(0, 0, 0, 0.25);
+        border: 1px solid var(--border);
+        border-radius: var(--rs);
+        padding: 10px 12px;
+        overflow: auto;
+        margin: 10px 0 12px;
+      }
+      .msgbody code,
+      .psbody code,
+      .fu-atext code {
+        font-family: 'DM Mono', monospace;
+        font-size: 12px;
+        color: rgba(230, 240, 255, 0.92);
+      }
       .msgbtns {
         padding: 0 20px 18px;
         display: flex;
@@ -713,6 +765,23 @@
       }
       .followup-panel #fu-btn {
         margin-top: 14px;
+      }
+      .followup-panel .fu-bottom {
+        position: sticky;
+        bottom: 0;
+        margin-top: 14px;
+        padding-top: 12px;
+        padding-bottom: 2px;
+        display: none;
+        gap: 8px;
+        justify-content: flex-end;
+        background: linear-gradient(
+          to top,
+          rgba(11, 22, 38, 0.98),
+          rgba(11, 22, 38, 0.6),
+          rgba(11, 22, 38, 0)
+        );
+        border-top: 1px solid rgba(255, 255, 255, 0.06);
       }
       .res-banner {
         font-size: 12.5px;
@@ -922,15 +991,110 @@
       }
 
       function renderMarkdown(md) {
-        let html = esc(md);
-        // Bold: **text** → <strong>text</strong>
-        html = html.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
-        // Italic: *text* → <em>text</em>
-        html = html.replace(/\*(.+?)\*/g, '<em>$1</em>');
-        // Line breaks: \n → <br>
-        html = html.replace(/\n/g, '<br>');
-        // Convert back to HTML-safe format while preserving tags
-        return html;
+        const src = String(md || '');
+        if (!src.trim()) return '';
+
+        // Minimal, safe markdown renderer:
+        // - Escapes everything first (via esc)
+        // - Then adds a small allowlist of tags (p/ul/ol/li/br/strong/em/code/pre/a/h3)
+        // - Supports: headings (##/###), bold/italic, links, fenced code, bullet/numbered lists, paragraphs
+
+        const fenceToken = '\u0000FENCE\u0000';
+        const fences = [];
+
+        // Extract fenced code blocks first (before escaping).
+        let raw = src.replace(/```([\s\S]*?)```/g, (_, code) => {
+          fences.push(code);
+          return fenceToken + (fences.length - 1) + fenceToken;
+        });
+
+        // Escape the remainder.
+        raw = esc(raw);
+
+        // Inline formatting helpers.
+        const inline = s =>
+          s
+            // Links: [text](url)
+            .replace(
+              /\[([^\]]+)\]\((https?:\/\/[^\s)]+)\)/g,
+              '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>',
+            )
+            // Bold: **text**
+            .replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+            // Italic: *text*
+            .replace(/\*(.+?)\*/g, '<em>$1</em>');
+
+        // Restore fenced blocks as <pre><code>.
+        raw = raw.replace(new RegExp(`${fenceToken}(\\d+)${fenceToken}`, 'g'), (_, i) => {
+          const code = esc(String(fences[Number(i)] ?? ''));
+          return `<pre><code>${code}</code></pre>`;
+        });
+
+        // Block rendering line-by-line.
+        const lines = raw.split(/\r?\n/);
+        let out = '';
+        let buf = [];
+        let listMode = ''; // 'ul' | 'ol' | ''
+
+        const flushPara = () => {
+          if (!buf.length) return;
+          out += `<p>${inline(buf.join(' ').trim())}</p>`;
+          buf = [];
+        };
+        const openList = mode => {
+          if (listMode === mode) return;
+          closeList();
+          listMode = mode;
+          out += mode === 'ul' ? '<ul>' : '<ol>';
+        };
+        const closeList = () => {
+          if (!listMode) return;
+          out += listMode === 'ul' ? '</ul>' : '</ol>';
+          listMode = '';
+        };
+
+        for (const line of lines) {
+          const t = line.trim();
+          if (!t) {
+            flushPara();
+            closeList();
+            continue;
+          }
+
+          // Headings (render as h3 to match UI scale)
+          const hm = t.match(/^(#{2,3})\s+(.+)$/);
+          if (hm) {
+            flushPara();
+            closeList();
+            out += `<h3>${inline(hm[2])}</h3>`;
+            continue;
+          }
+
+          // Unordered list
+          const ulm = t.match(/^[-•]\s+(.+)$/);
+          if (ulm) {
+            flushPara();
+            openList('ul');
+            out += `<li>${inline(ulm[1])}</li>`;
+            continue;
+          }
+
+          // Ordered list: "1. ..." / "1) ..."
+          const olm = t.match(/^\d+[.)]\s+(.+)$/);
+          if (olm) {
+            flushPara();
+            openList('ol');
+            out += `<li>${inline(olm[1])}</li>`;
+            continue;
+          }
+
+          // Default: paragraph buffer (keeps wrapped prose readable)
+          buf.push(t);
+        }
+
+        flushPara();
+        closeList();
+        return out;
       }
 
       function getEl(id) {
@@ -1609,6 +1773,10 @@
         <textarea id="fu-q" class="fu-ta" rows="3" placeholder="e.g. Does this change if my echo was normal last year?"></textarea>
         <button type="button" class="btn bprim" id="fu-btn" onclick="submitPatientFollowUp()">Ask the council</button>
         <div id="fu-thread"></div>
+        <div class="fu-bottom" id="fu-bottom">
+          <button class="btn bghost" onclick="startNew()">+ New Assessment</button>
+          <button class="btn bprim" onclick="copyMsg()">Copy Message</button>
+        </div>
       </div>
     </div>
   </div>`);
@@ -1621,6 +1789,7 @@
         const qEl = getEl('fu-q');
         const btn = getEl('fu-btn');
         const thread = getEl('fu-thread');
+        const bottom = getEl('fu-bottom');
         const q = qEl?.value?.trim();
         if (!q || q.length < 3) return;
         if (!S.consensus || !S.plan || !S.message) {
@@ -1656,6 +1825,7 @@
       </div>`,
             );
           }
+          if (bottom) bottom.style.display = 'flex';
           scrollBot();
         } catch (e) {
           if (thread)
