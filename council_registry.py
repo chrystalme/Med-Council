@@ -4,8 +4,8 @@ MedAI Council — shared registry (specialists, model id, prompt fragments).
 
 from __future__ import annotations
 
-# Newest NVIDIA flagship on OpenRouter (Dec 2025).
-MODEL = "nvidia/nemotron-3-super-120b-a12b"
+# Newest NVIDIA flagship on OpenRouter (Dec 2025) — free tier.
+MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
 
 SPECIALIST_META: dict[str, dict] = {
     "internal_medicine": {

@@ -54,6 +54,7 @@ from council_schemas import (
 
 from council import (
     ALL_SPECIALIST_IDS,
+    MODEL,
     SPECIALIST_AGENTS,
     SPECIALIST_META,
     consensus_agent,
@@ -167,7 +168,7 @@ async def lifespan(app: FastAPI):
 
     _init_feedback_db()
 
-    print("✓ Inference  → OpenRouter  (nvidia/nemotron-3-super-120b-a12b)")
+    print("✓ Inference  → OpenRouter  (nvidia/nemotron-3-super-120b-a12b:free)")
     print("✓ Tracing    → platform.openai.com/traces  (OpenAI Agents SDK exporter)")
     print(f"✓ Feedback   → {_DB_PATH}  (view: /feedback/{FEEDBACK_SECRET})")
 
@@ -433,7 +434,7 @@ def health():
         "status": "ok",
         "service": "MedAI Council",
         "version": "3.0.0",
-        "model": "nvidia/nemotron-3-super-120b-a12b",
+        "model": MODEL,
         "inference": "openrouter",
     }
 
