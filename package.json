@@ -1,0 +1,17 @@
+{
+  "name": "medai-council",
+  "version": "0.0.0",
+  "private": true,
+  "description": "MedAI Council — multi-agent clinical deliberation system (Next.js frontend + FastAPI backend)",
+  "scripts": {
+    "dev": "pnpm --filter web dev",
+    "build": "pnpm --filter web build",
+    "lint": "pnpm --filter web lint",
+    "api:dev": "cd apps/api && .venv/bin/uvicorn main:app --reload --port 8000",
+    "api:install": "cd apps/api && .venv/bin/pip install -r requirements.txt"
+  },
+  "engines": {
+    "node": ">=20",
+    "pnpm": ">=9"
+  }
+}

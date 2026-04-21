@@ -1,9 +1,51 @@
-docs
-scripts
-.env
-.cursor
-.venv
+# ─── Python ──────────────────────────────────────────────────────
 __pycache__/
 *.py[cod]
-.vercel
+.venv/
+.python-version
+
+# ─── Env & secrets ───────────────────────────────────────────────
+.env
+.env.*
+!.env.example
+
+# ─── Local-only artefacts ────────────────────────────────────────
 feedback.db
+apps/api/feedback.db
+
+# ─── Deployment caches ───────────────────────────────────────────
+.vercel/
+.gcloudignore
+
+# ─── Clerk local keyless config ──────────────────────────────────
+.clerk/
+apps/web/.clerk/
+
+# ─── Python utilities (local-only) ───────────────────────────────
+docs/
+scripts/
+apps/api/docs/
+apps/api/scripts/
+
+# ─── Node / Next.js ──────────────────────────────────────────────
+node_modules/
+.pnpm-store/
+.next/
+out/
+build/
+.turbo/
+
+# ─── Logs & OS ───────────────────────────────────────────────────
+*.log
+.DS_Store
+Thumbs.db
+
+# ─── Editor / IDE ────────────────────────────────────────────────
+.cursor/
+.idea/
+.vscode/
+!.vscode/extensions.json
+
+# ─── TypeScript / testing ────────────────────────────────────────
+*.tsbuildinfo
+coverage/

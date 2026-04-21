@@ -1,0 +1,150 @@
+@import "tailwindcss";
+
+/* ─────────────────────────────────────────────────────────────────
+   MedAI Council — design tokens
+   Aesthetic: quiet authority, editorial clinical.
+   Warm paper · deep ink · terracotta · sage · amber
+   ───────────────────────────────────────────────────────────────── */
+:root {
+  /* Surfaces */
+  --paper:        #faf7f2;   /* warm off-white, main bg */
+  --paper-deep:   #f3ede1;   /* recessed surfaces */
+  --surface:      #ffffff;   /* cards, input fields */
+  --line:         #e6e0d5;   /* hairline borders */
+  --line-strong:  #cdc5b5;   /* hover, emphasised */
+
+  /* Text */
+  --ink:          #18161a;   /* primary text, near-black warm */
+  --ink-muted:    #6a655f;   /* secondary */
+  --ink-faint:    #9a938a;   /* tertiary, timestamps, meta */
+
+  /* Accents */
+  --clay:         #b04e3c;   /* terracotta — primary action, urgent */
+  --clay-hover:   #953f31;
+  --clay-soft:    #f0e0d8;
+
+  --sage:         #5c7362;   /* sage — healthy / routine */
+  --sage-soft:    #e4ebe5;
+
+  --amber:        #c98a2e;   /* amber — caution */
+  --amber-soft:   #f7ecd6;
+
+  --crimson:      #a8302a;   /* deep red — emergency only */
+  --crimson-soft: #f4d9d7;
+}
+
+@theme inline {
+  --color-paper:        var(--paper);
+  --color-paper-deep:   var(--paper-deep);
+  --color-surface:      var(--surface);
+  --color-line:         var(--line);
+  --color-line-strong:  var(--line-strong);
+
+  --color-ink:          var(--ink);
+  --color-ink-muted:    var(--ink-muted);
+  --color-ink-faint:    var(--ink-faint);
+
+  --color-clay:         var(--clay);
+  --color-clay-hover:   var(--clay-hover);
+  --color-clay-soft:    var(--clay-soft);
+
+  --color-sage:         var(--sage);
+  --color-sage-soft:    var(--sage-soft);
+
+  --color-amber:        var(--amber);
+  --color-amber-soft:   var(--amber-soft);
+
+  --color-crimson:      var(--crimson);
+  --color-crimson-soft: var(--crimson-soft);
+
+  --font-sans:     var(--font-geist-sans);
+  --font-display:  var(--font-fraunces);
+  --font-mono:     var(--font-geist-mono);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html, body {
+  background: var(--paper);
+  color: var(--ink);
+}
+
+body {
+  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
+  font-feature-settings: "ss01", "cv11";
+  /* Faint dot grid — like engineering vellum or clinical ruled paper. */
+  background-image: radial-gradient(
+    rgba(24, 22, 26, 0.035) 1px,
+    transparent 1px
+  );
+  background-size: 28px 28px;
+  background-position: 0 0;
+}
+
+/* Display typography uses Fraunces with editorial variable-axis tweaks. */
+.font-display,
+h1, h2, h3 {
+  font-family: var(--font-fraunces), ui-serif, Georgia, serif;
+  font-variation-settings: "opsz" 96, "SOFT" 20, "WONK" 0;
+  letter-spacing: -0.02em;
+}
+
+/* Small-caps roman-numeral stage markers. */
+.stage-marker {
+  font-family: var(--font-fraunces), serif;
+  font-variation-settings: "opsz" 14, "SOFT" 0, "WONK" 1;
+  font-style: italic;
+  font-weight: 400;
+  font-size: 0.8125rem;
+  letter-spacing: 0.24em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+}
+
+/* Mono captions for case IDs, timestamps, ICD codes. */
+.mono-label {
+  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-size: 0.6875rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+/* Decorative hairline separator (like book chapter dividers). */
+.rule-ornament {
+  display: flex;
+  align-items: center;
+  gap: 0.75rem;
+  color: var(--ink-faint);
+}
+.rule-ornament::before,
+.rule-ornament::after {
+  content: "";
+  flex: 1;
+  height: 1px;
+  background: var(--line);
+}
+
+/* Selection */
+::selection {
+  background: var(--clay-soft);
+  color: var(--ink);
+}
+
+/* Focus rings — terracotta, subtle */
+:focus-visible {
+  outline: 2px solid var(--clay);
+  outline-offset: 2px;
+  border-radius: 2px;
+}
+
+/* Clerk component theming overrides — keep Clerk visuals on-brand. */
+.cl-rootBox, .cl-card {
+  --cl-primary: var(--clay);
+  --cl-primaryHover: var(--clay-hover);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow: 0 1px 2px rgba(24, 22, 26, 0.04), 0 8px 24px rgba(24, 22, 26, 0.06);
+}

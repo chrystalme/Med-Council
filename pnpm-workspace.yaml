@@ -1,0 +1,7 @@
+packages:
+  - "apps/*"
+
+# Native binaries we don't need to rebuild on install.
+ignoredBuiltDependencies:
+  - sharp
+  - unrs-resolver
