@@ -16,6 +16,7 @@ medai-council/
 ├── apps/
 │   ├── api/            FastAPI backend — the actual council pipeline
 │   │   ├── main.py     ASGI entrypoint, routes, startup
+│   │   ├── pyproject.toml + uv.lock   Python deps (uv); requirements.txt exported for deploy
 │   │   ├── council.py  Specialist Agent definitions (openai-agents SDK)
 │   │   ├── council_*.py  Registry, schemas, tools, handoffs
 │   │   ├── static/     Legacy vanilla UI (served at /, being phased out)
@@ -33,12 +34,13 @@ Two services, two deploy targets — eventually both on GCP Cloud Run.
 ## Prerequisites
 
 - **Node ≥ 20** and **pnpm ≥ 9** (for the web app)
-- **Python 3.12** (for the API — see `apps/api/.python-version`)
+- **[uv](https://docs.astral.sh/uv/getting-started/installation/)** (for the API — installs Python 3.12 + deps from `apps/api/pyproject.toml`)
+- **Python 3.12** (optional if you let `uv` manage interpreters; see `apps/api/.python-version`)
 - Accounts:
   - [OpenRouter](https://openrouter.ai) — model inference
   - [OpenAI](https://platform.openai.com) — tracing only (free)
   - [Clerk](https://dashboard.clerk.com) — authentication
-  - *Later:* Neon, Resend, GCP
+  - _Later:_ Neon, Resend, GCP
 
 ---
 
@@ -52,11 +54,23 @@ pnpm install
 
 ### 2. Install API dependencies
 
+From the **repository root** (uses [uv](https://docs.astral.sh/uv/) and `apps/api/pyproject.toml` + `uv.lock`):
+
+```bash
+pnpm run api:install
+```
+
+Or manually:
+
 ```bash
 cd apps/api
-python3.12 -m venv .venv
-source .venv/bin/activate
-pip install -r requirements.txt
+uv sync
+```
+
+`requirements.txt` in `apps/api/` is **exported from the lockfile** (`uv export …`) for hosts that only read `requirements.txt` (e.g. some Docker/Vercel flows). After changing dependencies in `pyproject.toml`, run `uv lock` and re-export:
+
+```bash
+cd apps/api && uv lock && uv export --no-hashes --no-dev -o requirements.txt
 ```
 
 ### 3. Configure environment
@@ -92,11 +106,22 @@ pnpm dev
 
 ### Backend (FastAPI on :8000)
 
+**From repo root (recommended):**
+
+```bash
+pnpm run api:install   # once: uv sync → .venv under apps/api
+pnpm run api:dev       # uv run uvicorn … on http://127.0.0.1:8000
+```
+
+**From `apps/api` directly:**
+
 ```bash
 cd apps/api
-source .venv/bin/activate
-uvicorn main:app --reload --port 8000
+uv sync
+uv run uvicorn main:app --reload --port 8000
 ```
+
+The process cwd is **`apps/api`**, so `main.py`, `auth.py`, and the council modules import correctly. `uv` keeps the virtualenv at **`apps/api/.venv`** by default.
 
 The frontend calls the backend via `NEXT_PUBLIC_API_BASE_URL` (default
 `http://localhost:8000`). Clerk-protected routes live under `/case`.
@@ -105,15 +130,15 @@ The frontend calls the backend via `NEXT_PUBLIC_API_BASE_URL` (default
 
 ## The pipeline (seven stages)
 
-| № | Stage | Endpoint | What it does |
-|---|---|---|---|
-| I | Intake | `POST /api/intake/followup` | Generates four clarifying questions |
-| II | Triage | `POST /api/triage` | Selects 4–6 specialists for deliberation |
-| III | Council | `POST /api/council/physician` | Per-specialist assessment, one call each |
-| IV | Research | `POST /api/research` | PubMed evidence round-up |
-| V | Consensus | `POST /api/consensus` | Structured diagnosis, ICD, confidence, urgency |
-| VI | Plan | `POST /api/plan` | Cross-specialty treatment plan |
-| VII | Message | `POST /api/message` | Empathetic patient-facing summary |
+| №   | Stage     | Endpoint                      | What it does                                   |
+| --- | --------- | ----------------------------- | ---------------------------------------------- |
+| I   | Intake    | `POST /api/intake/followup`   | Generates four clarifying questions            |
+| II  | Triage    | `POST /api/triage`            | Selects 4–6 specialists for deliberation       |
+| III | Council   | `POST /api/council/physician` | Per-specialist assessment, one call each       |
+| IV  | Research  | `POST /api/research`          | PubMed evidence round-up                       |
+| V   | Consensus | `POST /api/consensus`         | Structured diagnosis, ICD, confidence, urgency |
+| VI  | Plan      | `POST /api/plan`              | Cross-specialty treatment plan                 |
+| VII | Message   | `POST /api/message`           | Empathetic patient-facing summary              |
 
 A follow-up Q&A loop is available at `POST /api/message/followup`.
 
@@ -122,13 +147,12 @@ A follow-up Q&A loop is available at `POST /api/message/followup`.
 ## Roadmap
 
 - [x] **Step 1** — commit current state to `main`
-- [ ] **Step 2a** — monorepo restructure + Next.js scaffold + Clerk auth gate *(in progress)*
-- [ ] **Step 2b–d** — port the seven stages to Next.js
-- [ ] **Step 3** — Postgres persistence (case history, returning-patient continuity)
-- [ ] **Step 4** — on-call doctor escalation via Resend on high-severity cases
-- [ ] **Step 5** — SSE streaming, parallel specialist fan-out, rate limiting,
-      red-flag rules, tests, split routes
-- [ ] **Step 6** — paid tiers via Clerk/Stripe (free LLM for now)
+- [x] **Step 2a** — monorepo restructure + Next.js scaffold + Clerk auth gate
+- [x] **Step 2b–d** — seven pipeline stages in `/case` (`CaseWorkspace` → FastAPI)
+- [x] **Step 3** — case autosave via SQLite `cases` table + `/api/cases` _(Neon/Postgres later)_
+- [x] **Step 4** — on-call email via Resend when consensus urgency is high _(needs `RESEND\__` env)\*
+- [x] **Step 5** — optional `RATE_LIMIT_ENABLED` sliding window on `POST /api/*` _(SSE / parallel fan-out still open)_
+- [x] **Step 6** — paywall banner placeholder (`NEXT_PUBLIC_FEATURE_PAYWALL=1`) _(Stripe later)_
 - [ ] **Step 7** — GCP migration (Cloud Run + Cloud SQL)
 
 ---

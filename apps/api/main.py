@@ -15,22 +15,29 @@ Deploy (Vercel): root `app.py` re-exports this module; UI is served from `static
 
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import re
 import secrets
 import sqlite3
+import uuid
+from datetime import datetime, timezone
 from pathlib import Path
 from contextlib import asynccontextmanager, contextmanager
-from typing import Annotated, Any
+from typing import Annotated, Any, Optional
 from dotenv import load_dotenv
 from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
-from fastapi import FastAPI, HTTPException
+from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, field_validator
+
+from auth import AuthUser, auth_configured, current_user_maybe_required
+from escalation import maybe_escalate_oncall
+from rate_limit import enforce_rate_limit, rate_limit_enabled
 
 from agents import (
     Agent,
@@ -97,6 +104,23 @@ def _init_feedback_db() -> None:
     con.close()
 
 
+def _init_cases_db() -> None:
+    """Step 3 — persisted case drafts (SQLite, same file as feedback)."""
+    con = sqlite3.connect(str(_DB_PATH))
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS cases (
+               id         TEXT PRIMARY KEY,
+               user_id    TEXT NOT NULL DEFAULT '',
+               title      TEXT NOT NULL DEFAULT '',
+               state      TEXT NOT NULL DEFAULT '{}',
+               created_at TEXT NOT NULL,
+               updated_at TEXT NOT NULL
+           )"""
+    )
+    con.commit()
+    con.close()
+
+
 def _get_db() -> sqlite3.Connection:
     con = sqlite3.connect(str(_DB_PATH))
     con.row_factory = sqlite3.Row
@@ -117,6 +141,31 @@ def _flush_sdk_traces() -> None:
         pass
 
 
+def _coerce_trace_metadata(metadata: dict | None) -> dict[str, str]:
+    """Normalise trace metadata values to strings.
+
+    The OpenAI tracing ingestion endpoint requires every metadata value to be a
+    string. Different providers/models can leak non-string values (ints, bools,
+    None) through call sites. Coerce here so every call site is compatible.
+    """
+    if not metadata:
+        return {}
+    out: dict[str, str] = {}
+    for k, v in metadata.items():
+        if v is None:
+            continue
+        if isinstance(v, bool):
+            out[str(k)] = "true" if v else "false"
+        elif isinstance(v, (str, int, float)):
+            out[str(k)] = str(v)
+        else:
+            try:
+                out[str(k)] = json.dumps(v, default=str, ensure_ascii=False)
+            except Exception:
+                out[str(k)] = str(v)
+    return out
+
+
 @contextmanager
 def traced_workflow(name: str, *, group_id: str | None = None, metadata: dict | None = None):
     """OpenAI Agents SDK workflow trace + immediate export flush for the dashboard.
@@ -125,8 +174,9 @@ def traced_workflow(name: str, *, group_id: str | None = None, metadata: dict | 
         name: Workflow name shown in the trace dashboard.
         group_id: Optional session/conversation ID to link related traces.
         metadata: Arbitrary key-value pairs attached to the trace for filtering/search.
+            All values are coerced to strings (tracing ingestion requires string values).
     """
-    with workflow_trace(name, group_id=group_id, metadata=metadata or {}):
+    with workflow_trace(name, group_id=group_id, metadata=_coerce_trace_metadata(metadata)):
         yield
     _flush_sdk_traces()
 
@@ -167,10 +217,19 @@ async def lifespan(app: FastAPI):
     )
 
     _init_feedback_db()
+    _init_cases_db()
 
     print("✓ Inference  → OpenRouter  (nvidia/nemotron-3-super-120b-a12b:free)")
     print("✓ Tracing    → platform.openai.com/traces  (OpenAI Agents SDK exporter)")
     print(f"✓ Feedback   → {_DB_PATH}  (view: /feedback/{FEEDBACK_SECRET})")
+    if auth_configured():
+        print("✓ Auth       → Clerk JWT verification enabled (CLERK_ISSUER set)")
+    else:
+        print("⚠ Auth       → DISABLED (set CLERK_ISSUER to require signed sessions)")
+    if rate_limit_enabled():
+        print("✓ Rate limit → ENABLED (RATE_LIMIT_ENABLED=1, per-IP sliding window)")
+    if os.environ.get("RESEND_API_KEY") and os.environ.get("ONCALL_DOCTOR_EMAIL"):
+        print("✓ Escalation → Resend on-call notifications enabled")
 
     yield
 
@@ -190,6 +249,13 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+
+@app.middleware("http")
+async def _rate_limit_middleware(request: Request, call_next):
+    if request.method == "POST" and request.url.path.startswith("/api/"):
+        enforce_rate_limit(request)
+    return await call_next(request)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -473,7 +539,109 @@ class FeedbackIn(BaseModel):
     diagnosis: str = Field(default="")
 
 
-@app.post("/api/feedback")
+def _utc_now() -> str:
+    return datetime.now(timezone.utc).isoformat()
+
+
+def _cases_user_id(user: Optional[AuthUser]) -> str:
+    return user.user_id if user else ""
+
+
+class CaseCreateIn(BaseModel):
+    title: str = Field(default="", max_length=500)
+
+
+class CasePatchIn(BaseModel):
+    state: dict[str, Any]
+    title: str | None = Field(default=None, max_length=500)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Case persistence (Step 3)
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+@app.post("/api/cases")
+async def cases_create(req: CaseCreateIn, user: Optional[AuthUser] = Depends(current_user_maybe_required)):
+    cid = str(uuid.uuid4())
+    uid = _cases_user_id(user)
+    now = _utc_now()
+    con = _get_db()
+    con.execute(
+        "INSERT INTO cases (id, user_id, title, state, created_at, updated_at) VALUES (?,?,?,?,?,?)",
+        (cid, uid, req.title or "Untitled case", "{}", now, now),
+    )
+    con.commit()
+    con.close()
+    return {"id": cid, "title": req.title or "Untitled case", "created_at": now}
+
+
+@app.get("/api/cases")
+def cases_list(user: Optional[AuthUser] = Depends(current_user_maybe_required)):
+    uid = _cases_user_id(user)
+    con = _get_db()
+    rows = con.execute(
+        "SELECT id, title, updated_at FROM cases WHERE user_id = ? ORDER BY updated_at DESC LIMIT 50",
+        (uid,),
+    ).fetchall()
+    con.close()
+    return {"cases": [{"id": r["id"], "title": r["title"], "updated_at": r["updated_at"]} for r in rows]}
+
+
+@app.get("/api/cases/{case_id}")
+def cases_get(case_id: str, user: Optional[AuthUser] = Depends(current_user_maybe_required)):
+    uid = _cases_user_id(user)
+    con = _get_db()
+    row = con.execute(
+        "SELECT id, user_id, title, state, created_at, updated_at FROM cases WHERE id = ?",
+        (case_id,),
+    ).fetchone()
+    con.close()
+    if not row or row["user_id"] != uid:
+        raise HTTPException(status_code=404, detail="Case not found")
+    try:
+        state = json.loads(row["state"] or "{}")
+    except json.JSONDecodeError:
+        state = {}
+    return {
+        "id": row["id"],
+        "title": row["title"],
+        "state": state,
+        "created_at": row["created_at"],
+        "updated_at": row["updated_at"],
+    }
+
+
+@app.patch("/api/cases/{case_id}")
+async def cases_patch(
+    case_id: str,
+    req: CasePatchIn,
+    user: Optional[AuthUser] = Depends(current_user_maybe_required),
+):
+    uid = _cases_user_id(user)
+    con = _get_db()
+    row = con.execute("SELECT user_id FROM cases WHERE id = ?", (case_id,)).fetchone()
+    if not row or row["user_id"] != uid:
+        con.close()
+        raise HTTPException(status_code=404, detail="Case not found")
+    now = _utc_now()
+    state_json = json.dumps(req.state, ensure_ascii=False)
+    if req.title is not None:
+        con.execute(
+            "UPDATE cases SET state = ?, title = ?, updated_at = ? WHERE id = ?",
+            (state_json, req.title[:500], now, case_id),
+        )
+    else:
+        con.execute(
+            "UPDATE cases SET state = ?, updated_at = ? WHERE id = ?",
+            (state_json, now, case_id),
+        )
+    con.commit()
+    con.close()
+    return {"id": case_id, "updated_at": now}
+
+
+@app.post("/api/feedback", dependencies=[Depends(current_user_maybe_required)])
 async def submit_feedback(req: FeedbackIn):
     prompt = json.dumps({
         "rating": req.rating,
@@ -548,7 +716,7 @@ _FEEDBACK_PAGE = """<!doctype html>
 #  Stage 1 — Intake
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.post("/api/intake/followup")
+@app.post("/api/intake/followup", dependencies=[Depends(current_user_maybe_required)])
 async def intake_followup(req: SymptomsIn):
     try:
         with traced_workflow(
@@ -582,7 +750,7 @@ async def intake_followup(req: SymptomsIn):
 #  Stage 2 — Triage
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.post("/api/triage")
+@app.post("/api/triage", dependencies=[Depends(current_user_maybe_required)])
 async def triage(req: TriageIn):
     prompt = (
         f"Patient symptoms: {req.symptoms}\n\n"
@@ -619,7 +787,7 @@ async def triage(req: TriageIn):
 #  Stage 2b — Deliberation Expert Selection (optional alternative to triage)
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.post("/api/deliberation/select-experts")
+@app.post("/api/deliberation/select-experts", dependencies=[Depends(current_user_maybe_required)])
 async def select_deliberation_experts(req: TriageIn):
     """Select 4–6 expert specialists for structured deliberation (symptoms + follow-up answers)."""
     prompt = (
@@ -705,7 +873,7 @@ def _council_context_block(council_context: str) -> str:
     return f"\n\nDeliberation lead framing (use alongside the chart):\n{t}"
 
 
-@app.post("/api/council/specialist")
+@app.post("/api/council/specialist", dependencies=[Depends(current_user_maybe_required)])
 async def council_specialist(req: SpecialistIn):
     if req.specialist_id not in SPECIALIST_AGENTS:
         raise HTTPException(
@@ -746,7 +914,7 @@ async def council_specialist(req: SpecialistIn):
     }
 
 
-@app.post("/api/council/physician")
+@app.post("/api/council/physician", dependencies=[Depends(current_user_maybe_required)])
 async def council_physician(req: PhysicianIn):
     """Alias for council_specialist to match frontend naming (physician_id instead of specialist_id)"""
     if req.physician_id not in SPECIALIST_AGENTS:
@@ -792,7 +960,7 @@ async def council_physician(req: PhysicianIn):
 #  Stage 4 — Research
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.post("/api/research")
+@app.post("/api/research", dependencies=[Depends(current_user_maybe_required)])
 async def research(req: ResearchIn):
     assessments_text = "\n\n".join(
         f"{a['name']} ({a['specialty']}):\n{a['assessment']}" for a in req.assessments
@@ -836,7 +1004,7 @@ async def research(req: ResearchIn):
 #  Stage 5 — Consensus / Diagnosis
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.post("/api/consensus")
+@app.post("/api/consensus", dependencies=[Depends(current_user_maybe_required)])
 async def consensus(req: ConsensusIn):
     assessments_text = "\n\n".join(
         f"{a['name']} ({a['specialty']}):\n{a['assessment']}" for a in req.assessments
@@ -865,7 +1033,16 @@ async def consensus(req: ConsensusIn):
     try:
         data = parse_json(raw)
     except ValueError as e:
-        raise HTTPException(status_code=502, detail=str(e))
+        raise HTTPException(status_code=502, detail=str(e)) from e
+
+    if isinstance(data, dict):
+        asyncio.create_task(
+            asyncio.to_thread(
+                maybe_escalate_oncall,
+                consensus=data,
+                symptoms=req.symptoms,
+            )
+        )
 
     return {"consensus": data}
 
@@ -874,7 +1051,7 @@ async def consensus(req: ConsensusIn):
 #  Stage 6 — Treatment Plan
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.post("/api/plan")
+@app.post("/api/plan", dependencies=[Depends(current_user_maybe_required)])
 async def plan(req: PlanIn):
     assessments_text = "\n\n".join(
         f"{a['name']} ({a['specialty']}):\n{a['assessment']}" for a in req.assessments
@@ -901,7 +1078,7 @@ async def plan(req: PlanIn):
 #  Stage 7 — Patient Message
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.post("/api/message")
+@app.post("/api/message", dependencies=[Depends(current_user_maybe_required)])
 async def patient_message(req: MessageIn):
     prompt = (
         f"Primary diagnosis: {req.consensus.get('primaryDiagnosis')} "
@@ -925,7 +1102,7 @@ async def patient_message(req: MessageIn):
     return {"message": message}
 
 
-@app.post("/api/message/followup")
+@app.post("/api/message/followup", dependencies=[Depends(current_user_maybe_required)])
 async def patient_message_followup(req: PatientFollowUpIn):
     """Answer patient questions after the final message; optional prior diagnostics for context."""
     prior = ""

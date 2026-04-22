@@ -2,7 +2,9 @@
 __pycache__/
 *.py[cod]
 .venv/
+# Pin API Python for uv/CI; allow apps/api/.python-version
 .python-version
+!apps/api/.python-version
 
 # ─── Env & secrets ───────────────────────────────────────────────
 .env
