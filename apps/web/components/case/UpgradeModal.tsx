@@ -36,6 +36,20 @@ const COPY: Record<string, Omit<Prompt, "code">> = {
     message:
       "Free tier uses your browser's built-in speech engine. Upgrade to Pro for Whisper + premium TTS voices.",
   },
+  email_premium: {
+    title: "Emailing summaries requires Pro.",
+    message:
+      "Upgrade to Pro to send the plan and patient message as a formatted email via Resend.",
+  },
+  email_not_configured: {
+    title: "Email sending isn't set up yet.",
+    message:
+      "The server doesn't have RESEND_API_KEY and RESEND_FROM_EMAIL configured. Ask an admin to add them.",
+  },
+  email_send_failed: {
+    title: "Couldn't send that email.",
+    message: "The provider rejected the request. Please try again in a moment.",
+  },
   premium_model: {
     title: "That model is Pro-only.",
     message: "We've routed this run to the default free model instead.",
@@ -51,11 +65,14 @@ function fallback(message: string, code?: string): Prompt {
 }
 
 export function pickPrompt(err: CouncilApiError): Prompt | null {
-  if (err.status !== 402 && err.status !== 415) return null;
+  // 402 = paywall, 415 = unsupported media, 502/503 = provider misconfig.
+  if (![402, 415, 502, 503].includes(err.status)) return null;
   const code = err.code;
   if (code && COPY[code]) {
     return { code, ...COPY[code] };
   }
+  // Unknown code on one of these statuses — still surface a modal so the
+  // user isn't left with a silent failure.
   return fallback(err.message, code);
 }
 

@@ -39,7 +39,11 @@ from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, field_validator
 
 from auth import AuthUser, auth_configured, current_user_maybe_required, require_pro
-from escalation import maybe_escalate_oncall
+from escalation import (
+    ResendNotConfiguredError,
+    maybe_escalate_oncall,
+    send_patient_email,
+)
 from rate_limit import enforce_rate_limit, rate_limit_enabled
 
 from agents import (
@@ -1841,3 +1845,74 @@ async def speech_synthesize(
     except Exception as exc:
         log.exception("synthesis failed")
         raise HTTPException(status_code=502, detail={"code": "synthesize_failed", "message": str(exc)[:200]}) from exc
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Email to patient (Pro only) — send plan + patient message via Resend
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class EmailToPatientIn(BaseModel):
+    to: Annotated[str, Field(min_length=3, max_length=320, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")]
+    patient_name: str | None = None
+    subject: str | None = None
+    consensus: dict | None = None
+    plan: str = ""
+    message: str = ""
+
+
+@app.post("/api/patient/email")
+async def email_patient(
+    req: EmailToPatientIn,
+    user: AuthUser = Depends(require_pro),
+):
+    """Send the coordinated plan + patient message to the patient's inbox via Resend.
+
+    Pro-only. Requires RESEND_API_KEY + RESEND_FROM_EMAIL to be configured.
+    """
+    if not (req.plan.strip() or req.message.strip()):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "empty_email",
+                "message": "Provide a plan, a patient message, or both before sending.",
+            },
+        )
+
+    c = req.consensus or {}
+    primary_dx = (
+        c.get("primaryDiagnosis")
+        or c.get("primary_diagnosis")
+        or None
+    )
+    urgency = c.get("urgency") or c.get("urgencyLevel") or None
+    confidence = c.get("confidence") if isinstance(c.get("confidence"), (int, float)) else None
+
+    try:
+        result = send_patient_email(
+            to=req.to,
+            patient_name=req.patient_name,
+            subject=req.subject,
+            primary_dx=primary_dx,
+            urgency=urgency,
+            confidence=confidence,
+            plan_md=req.plan,
+            message_md=req.message,
+            reply_to=user.email,
+        )
+    except ResendNotConfiguredError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "email_not_configured",
+                "message": str(exc),
+            },
+        ) from exc
+    except RuntimeError as exc:
+        raise HTTPException(
+            status_code=502,
+            detail={"code": "email_send_failed", "message": str(exc)[:400]},
+        ) from exc
+
+    log.info("patient email sent by user=%s to=%s", user.user_id, req.to)
+    return {"ok": True, "provider_id": result.get("id")}

@@ -28,42 +28,52 @@ function humanSize(bytes: number): string {
   return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
 }
 
+/**
+ * Case-level test-results panel. Renders a single block containing:
+ *   - file upload
+ *   - paste-text area
+ *   - list of ALL attachments for this case (deduped, any question)
+ *
+ * Attachments are optionally tagged to a follow-up question via the inline
+ * dropdown. Defaults to "Any question" (question_index=null).
+ */
 export function TestAttachment({
   caseId,
-  questionIndex,
+  questionOptions,
   onChange,
   onPaywallError,
 }: {
   caseId: string | null;
-  questionIndex: number;
+  /** Labels for the follow-up questions, used by the optional tag dropdown. */
+  questionOptions?: string[];
   onChange?: () => void;
   onPaywallError?: (err: unknown) => void;
 }) {
   const { getToken } = useAuth();
   const [rows, setRows] = useState<AttachmentRow[]>([]);
   const [pasted, setPasted] = useState("");
+  const [selectedQ, setSelectedQ] = useState<number | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const pasteTimer = useRef<ReturnType<typeof setTimeout> | null>(null);
 
   const refresh = useCallback(async () => {
-    if (!caseId) return;
+    if (!caseId) {
+      setRows([]);
+      return;
+    }
     try {
       const tok = await getToken().catch(() => null);
       const data = await councilJson<{ attachments: AttachmentRow[] }>(
         `/api/cases/${caseId}/attachments`,
         { method: "GET", token: tok }
       );
-      setRows(
-        (data.attachments ?? []).filter(
-          (r) => r.question_index === questionIndex
-        )
-      );
+      setRows(data.attachments ?? []);
     } catch {
       /* ignore */
     }
-  }, [caseId, getToken, questionIndex]);
+  }, [caseId, getToken]);
 
   useEffect(() => {
     void refresh();
@@ -101,11 +111,7 @@ export function TestAttachment({
           } catch {
             /* ignore */
           }
-          throw new CouncilApiError(msg, {
-            status: res.status,
-            code,
-            detail,
-          });
+          throw new CouncilApiError(msg, { status: res.status, code, detail });
         }
         await refresh();
         onChange?.();
@@ -127,11 +133,11 @@ export function TestAttachment({
       const fd = new FormData();
       fd.append("file", f);
       fd.append("kind", "file");
-      fd.append("question_index", String(questionIndex));
+      if (selectedQ !== null) fd.append("question_index", String(selectedQ));
       await uploadForm(fd);
       if (fileRef.current) fileRef.current.value = "";
     },
-    [questionIndex, uploadForm]
+    [selectedQ, uploadForm]
   );
 
   const commitPasted = useCallback(
@@ -140,11 +146,11 @@ export function TestAttachment({
       const fd = new FormData();
       fd.append("text", text);
       fd.append("kind", "pasted");
-      fd.append("question_index", String(questionIndex));
+      if (selectedQ !== null) fd.append("question_index", String(selectedQ));
       await uploadForm(fd);
       setPasted("");
     },
-    [questionIndex, uploadForm]
+    [selectedQ, uploadForm]
   );
 
   const onPasteChange = (val: string) => {
@@ -173,43 +179,92 @@ export function TestAttachment({
     [caseId, getToken, onChange, refresh]
   );
 
+  const totalBytes = rows.reduce((n, r) => n + (r.size_bytes || 0), 0);
+
   return (
-    <div className="rounded-lg border border-line/70 bg-paper-deep/40 p-3 space-y-2">
-      <div className="flex items-center justify-between">
-        <span className="mono-label">Test results (optional)</span>
-        <div className="flex items-center gap-2">
-          {status && (
-            <span className="mono-label text-cornflower">{status}</span>
-          )}
-          {err && (
-            <span className="mono-label text-urgent" title={err}>
-              error
-            </span>
-          )}
-          <label
-            className={[
-              "mono-label inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full border cursor-pointer transition-colors",
-              caseId
-                ? "border-line-strong text-ink-muted hover:border-indigo hover:text-indigo"
-                : "border-line text-ink-faint opacity-60 cursor-not-allowed",
-            ].join(" ")}
-          >
-            <span aria-hidden>📎</span> attach file
-            <input
-              ref={fileRef}
-              type="file"
-              accept={ACCEPT}
-              className="hidden"
-              disabled={!caseId}
-              onChange={onFileChange}
-            />
-          </label>
+    <div className="rounded-xl border border-line bg-paper-deep/40 p-4 space-y-3">
+      <div className="flex items-baseline justify-between gap-3">
+        <div>
+          <p className="mono-label">
+            Test results <span className="diamond" /> optional
+          </p>
+          <p className="text-[13px] text-ink-slate mt-0.5 max-w-[52ch]">
+            Attach lab PDFs, imaging reports, or paste values. Everything here
+            is fed to the council, consensus, and plan agents.
+          </p>
         </div>
+        <span className="mono-label text-ink-faint shrink-0">
+          {rows.length} file{rows.length === 1 ? "" : "s"}
+          {rows.length > 0 && (
+            <>
+              {" "}
+              <span className="diamond" /> {humanSize(totalBytes)}
+            </>
+          )}
+        </span>
+      </div>
+
+      <div className="flex flex-wrap items-center gap-2">
+        {questionOptions && questionOptions.length > 0 && (
+          <div className="relative">
+            <select
+              value={selectedQ === null ? "" : String(selectedQ)}
+              onChange={(e) => {
+                const v = e.target.value;
+                setSelectedQ(v === "" ? null : Number(v));
+              }}
+              disabled={!caseId}
+              className="appearance-none bg-surface border border-line-strong focus:border-indigo focus:outline-none focus:ring-2 focus:ring-indigo-soft text-[13px] text-ink pl-3 pr-8 py-1.5 rounded-full transition-colors disabled:opacity-50"
+            >
+              <option value="">Tag → any question</option>
+              {questionOptions.map((q, i) => (
+                <option key={i} value={i}>
+                  Tag → Q{i + 1}: {q.slice(0, 40)}
+                  {q.length > 40 ? "…" : ""}
+                </option>
+              ))}
+            </select>
+            <span
+              aria-hidden
+              className="pointer-events-none absolute inset-y-0 right-2.5 inline-flex items-center text-ink-faint"
+            >
+              ▾
+            </span>
+          </div>
+        )}
+
+        <label
+          className={[
+            "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-[13px] cursor-pointer transition-colors",
+            caseId
+              ? "border-line-strong text-ink-muted hover:border-indigo hover:text-indigo"
+              : "border-line text-ink-faint opacity-60 cursor-not-allowed",
+          ].join(" ")}
+        >
+          <span aria-hidden>📎</span> Attach file
+          <input
+            ref={fileRef}
+            type="file"
+            accept={ACCEPT}
+            className="hidden"
+            disabled={!caseId}
+            onChange={onFileChange}
+          />
+        </label>
+
+        {status && (
+          <span className="mono-label text-cornflower">{status}</span>
+        )}
+        {err && (
+          <span className="mono-label text-urgent" title={err}>
+            error
+          </span>
+        )}
       </div>
 
       <textarea
-        className="field min-h-[52px] text-[13px]"
-        placeholder="Or paste test values here (auto-saves)…"
+        className="field min-h-[60px] text-[13.5px]"
+        placeholder="Or paste test values here (auto-saves after a short pause)…"
         disabled={!caseId}
         value={pasted}
         onChange={(e) => onPasteChange(e.target.value)}
@@ -217,35 +272,46 @@ export function TestAttachment({
 
       {rows.length > 0 && (
         <ul className="space-y-1.5">
-          {rows.map((r) => (
-            <li
-              key={r.id}
-              className="flex items-start justify-between gap-3 text-[13px] bg-surface border border-line rounded p-2"
-            >
-              <div className="min-w-0 flex-1">
-                <p className="font-medium text-ink truncate">
-                  {r.kind === "file"
-                    ? r.filename || "attachment"
-                    : "pasted text"}
-                  <span className="ml-2 mono-label">
-                    {humanSize(r.size_bytes)}
-                  </span>
-                </p>
-                <p className="text-ink-slate truncate">
-                  {(r.text_preview || "").slice(0, 100)}
-                  {r.text_preview && r.text_preview.length > 100 ? "…" : ""}
-                </p>
-              </div>
-              <button
-                type="button"
-                onClick={() => void onDelete(r.id)}
-                className="mono-label text-ink-muted hover:text-urgent transition-colors shrink-0"
-                title="Remove attachment"
+          {rows.map((r) => {
+            const qTag =
+              r.question_index !== null && questionOptions?.[r.question_index]
+                ? `Q${r.question_index + 1}`
+                : null;
+            return (
+              <li
+                key={r.id}
+                className="flex items-start justify-between gap-3 text-[13px] bg-surface border border-line rounded-lg p-2.5"
               >
-                ✕
-              </button>
-            </li>
-          ))}
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline gap-2 flex-wrap">
+                    <p className="font-medium text-ink truncate">
+                      {r.kind === "file"
+                        ? r.filename || "attachment"
+                        : "pasted text"}
+                    </p>
+                    <span className="mono-label text-ink-faint">
+                      {humanSize(r.size_bytes)}
+                    </span>
+                    {qTag && (
+                      <span className="mono-label text-indigo">{qTag}</span>
+                    )}
+                  </div>
+                  <p className="text-ink-slate truncate mt-0.5">
+                    {(r.text_preview || "").slice(0, 140)}
+                    {r.text_preview && r.text_preview.length > 140 ? "…" : ""}
+                  </p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => void onDelete(r.id)}
+                  className="mono-label text-ink-muted hover:text-urgent transition-colors shrink-0"
+                  title="Remove attachment"
+                >
+                  ✕
+                </button>
+              </li>
+            );
+          })}
         </ul>
       )}
     </div>

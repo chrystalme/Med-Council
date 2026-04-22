@@ -12,6 +12,7 @@ import { VoiceOutput } from './VoiceOutput';
 import { PatientContext } from './PatientContext';
 import { TestAttachment } from './TestAttachment';
 import { UpgradeModal, useUpgradePrompt } from './UpgradeModal';
+import { EmailToPatient } from './EmailToPatient';
 
 type Physician = {
   id: string;
@@ -439,6 +440,11 @@ export function CaseWorkspace() {
 
   const runPlan = async () => {
     if (!consensus) return;
+    // Idempotent: don't regenerate if we already have a plan for this case.
+    if (plan && plan.trim().length > 0) {
+      advanceTo(6);
+      return;
+    }
     setErr(null);
     setBusy('Drafting coordinated plan…');
     const tok = await tokenFn();
@@ -470,6 +476,11 @@ export function CaseWorkspace() {
 
   const runMessage = async () => {
     if (!consensus) return;
+    // Idempotent: don't regenerate if we already have a patient message.
+    if (message && message.trim().length > 0) {
+      advanceTo(7);
+      return;
+    }
     setErr(null);
     setBusy('Writing patient-facing summary…');
     const tok = await tokenFn();
@@ -861,14 +872,14 @@ export function CaseWorkspace() {
                       }
                     />
                   </div>
-                  <TestAttachment
-                    caseId={caseId}
-                    questionIndex={i}
-                    onPaywallError={upgrade.show}
-                  />
                 </li>
               ))}
             </ol>
+            <TestAttachment
+              caseId={caseId}
+              questionOptions={fqLines}
+              onPaywallError={upgrade.show}
+            />
             <button
               type='button'
               className='btn-indigo'
@@ -1096,8 +1107,17 @@ export function CaseWorkspace() {
                   table.
                 </p>
               </div>
-              <VoiceOutput text={message} label='Read patient message aloud' onPaywallError={upgrade.show} />
+              <div className='flex items-center gap-2'>
+                <VoiceOutput text={message} label='Read patient message aloud' onPaywallError={upgrade.show} />
+              </div>
             </div>
+
+            <EmailToPatient
+              consensus={consensus}
+              plan={plan}
+              message={message}
+              onPaywallError={upgrade.show}
+            />
 
             <div className='rounded-xl border border-line bg-surface p-6'>
               <Markdown>{message}</Markdown>
