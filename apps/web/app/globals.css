@@ -1,65 +1,90 @@
 @import "tailwindcss";
 
 /* ─────────────────────────────────────────────────────────────────
-   MedAI Council — design tokens
-   Aesthetic: quiet authority, editorial clinical.
-   Warm paper · deep ink · terracotta · sage · amber
+   MedAI Council — Atlas of Clinical Reason
+   Palette: #3D52A0  #7091E6  #8697C4  #ADBBDA  #EDE8F5
+   Mood: editorial medical atlas, cool scientific precision.
    ───────────────────────────────────────────────────────────────── */
 :root {
   /* Surfaces */
-  --paper:        #faf7f2;   /* warm off-white, main bg */
-  --paper-deep:   #f3ede1;   /* recessed surfaces */
+  --paper:        #ede8f5;   /* lavender mist, main background */
+  --paper-deep:   #e1dcef;   /* recessed / secondary surfaces */
+  --paper-lower:  #d6d2e6;   /* lowest surface, deepest well */
   --surface:      #ffffff;   /* cards, input fields */
-  --line:         #e6e0d5;   /* hairline borders */
-  --line-strong:  #cdc5b5;   /* hover, emphasised */
+  --surface-tint: #f6f3fa;   /* faintly tinted card variants */
 
-  /* Text */
-  --ink:          #18161a;   /* primary text, near-black warm */
-  --ink-muted:    #6a655f;   /* secondary */
-  --ink-faint:    #9a938a;   /* tertiary, timestamps, meta */
+  --line:         #cfd3e4;   /* hairline borders */
+  --line-strong:  #adbbda;   /* emphasised borders */
+  --line-deep:    #8697c4;   /* active borders */
 
-  /* Accents */
-  --clay:         #b04e3c;   /* terracotta — primary action, urgent */
-  --clay-hover:   #953f31;
-  --clay-soft:    #f0e0d8;
+  /* Ink — text hierarchy */
+  --ink:          #1a2348;   /* primary — deepened indigo */
+  --ink-muted:    #3d52a0;   /* secondary, subheads, authoritative */
+  --ink-slate:    #5a6690;   /* tertiary body */
+  --ink-faint:    #8697c4;   /* meta, timestamps, codes */
+  --ink-whisper:  #adbbda;   /* rules, decorative */
 
-  --sage:         #5c7362;   /* sage — healthy / routine */
-  --sage-soft:    #e4ebe5;
+  /* Signal accents — all derived from the palette */
+  --indigo:       #3d52a0;   /* deep indigo — primary action, identity */
+  --indigo-hover: #31428a;   /* darker on interaction */
+  --indigo-soft:  #dde2f2;   /* tinted fill */
 
-  --amber:        #c98a2e;   /* amber — caution */
-  --amber-soft:   #f7ecd6;
+  --cornflower:       #7091e6;   /* cornflower — live / in-progress */
+  --cornflower-hover: #5a7bd1;
+  --cornflower-soft:  #e0e8f9;
 
-  --crimson:      #a8302a;   /* deep red — emergency only */
-  --crimson-soft: #f4d9d7;
+  --slate:        #8697c4;   /* meta / neutral / completed */
+  --slate-soft:   #e5eaf4;
+
+  --periwinkle:   #adbbda;   /* decorative / idle */
+  --periwinkle-soft: #edeff7;
+
+  /* Recoded signal tones using only palette values */
+  --done:         #8697c4;   /* completed steps */
+  --live:         #7091e6;   /* active work */
+  --urgent:       #1a2348;   /* deep-ink urgent callout */
+  --urgent-soft:  #dde2f2;
 }
 
 @theme inline {
   --color-paper:        var(--paper);
   --color-paper-deep:   var(--paper-deep);
+  --color-paper-lower:  var(--paper-lower);
   --color-surface:      var(--surface);
+  --color-surface-tint: var(--surface-tint);
+
   --color-line:         var(--line);
   --color-line-strong:  var(--line-strong);
+  --color-line-deep:    var(--line-deep);
 
   --color-ink:          var(--ink);
   --color-ink-muted:    var(--ink-muted);
+  --color-ink-slate:    var(--ink-slate);
   --color-ink-faint:    var(--ink-faint);
+  --color-ink-whisper:  var(--ink-whisper);
 
-  --color-clay:         var(--clay);
-  --color-clay-hover:   var(--clay-hover);
-  --color-clay-soft:    var(--clay-soft);
+  --color-indigo:       var(--indigo);
+  --color-indigo-hover: var(--indigo-hover);
+  --color-indigo-soft:  var(--indigo-soft);
 
-  --color-sage:         var(--sage);
-  --color-sage-soft:    var(--sage-soft);
+  --color-cornflower:       var(--cornflower);
+  --color-cornflower-hover: var(--cornflower-hover);
+  --color-cornflower-soft:  var(--cornflower-soft);
 
-  --color-amber:        var(--amber);
-  --color-amber-soft:   var(--amber-soft);
+  --color-slate:        var(--slate);
+  --color-slate-soft:   var(--slate-soft);
 
-  --color-crimson:      var(--crimson);
-  --color-crimson-soft: var(--crimson-soft);
+  --color-periwinkle:      var(--periwinkle);
+  --color-periwinkle-soft: var(--periwinkle-soft);
 
-  --font-sans:     var(--font-geist-sans);
+  --color-done:         var(--done);
+  --color-live:         var(--live);
+  --color-urgent:       var(--urgent);
+  --color-urgent-soft:  var(--urgent-soft);
+
+  --font-sans:     var(--font-instrument-sans);
   --font-display:  var(--font-fraunces);
-  --font-mono:     var(--font-geist-mono);
+  --font-mono:     var(--font-jetbrains-mono);
 }
 
 * {
@@ -72,79 +97,412 @@ html, body {
 }
 
 body {
-  font-family: var(--font-geist-sans), ui-sans-serif, system-ui, sans-serif;
-  font-feature-settings: "ss01", "cv11";
-  /* Faint dot grid — like engineering vellum or clinical ruled paper. */
-  background-image: radial-gradient(
-    rgba(24, 22, 26, 0.035) 1px,
-    transparent 1px
-  );
-  background-size: 28px 28px;
-  background-position: 0 0;
+  font-family: var(--font-instrument-sans), ui-sans-serif, system-ui, sans-serif;
+  font-feature-settings: "ss01", "cv11", "ss02";
+  /* Atlas grid — two superimposed layers: a fine dot mesh and coarser crossing hairlines. */
+  background-color: var(--paper);
+  background-image:
+    /* fine dot mesh */
+    radial-gradient(rgba(61, 82, 160, 0.06) 1px, transparent 1px),
+    /* vertical hairlines every 112px */
+    linear-gradient(to right, rgba(61, 82, 160, 0.035) 1px, transparent 1px),
+    /* horizontal hairlines every 112px */
+    linear-gradient(to bottom, rgba(61, 82, 160, 0.035) 1px, transparent 1px);
+  background-size: 28px 28px, 112px 112px, 112px 112px;
+  background-position: 0 0, 0 0, 0 0;
 }
 
-/* Display typography uses Fraunces with editorial variable-axis tweaks. */
+/* Display — Fraunces tuned wonky, editorial */
 .font-display,
 h1, h2, h3 {
   font-family: var(--font-fraunces), ui-serif, Georgia, serif;
-  font-variation-settings: "opsz" 96, "SOFT" 20, "WONK" 0;
-  letter-spacing: -0.02em;
+  font-variation-settings: "opsz" 144, "SOFT" 30, "WONK" 1;
+  letter-spacing: -0.025em;
 }
 
-/* Small-caps roman-numeral stage markers. */
-.stage-marker {
+/* Roman numeral plate markers, tall & hairline */
+.plate-numeral {
   font-family: var(--font-fraunces), serif;
-  font-variation-settings: "opsz" 14, "SOFT" 0, "WONK" 1;
+  font-variation-settings: "opsz" 144, "SOFT" 0, "WONK" 1;
   font-style: italic;
-  font-weight: 400;
-  font-size: 0.8125rem;
-  letter-spacing: 0.24em;
+  font-weight: 300;
+  letter-spacing: -0.04em;
+  color: var(--ink-whisper);
+  line-height: 0.8;
+}
+
+/* Small-caps stage markers — tracked out, authoritative */
+.stage-marker {
+  font-family: var(--font-jetbrains-mono), ui-monospace, monospace;
+  font-weight: 500;
+  font-size: 0.6875rem;
+  letter-spacing: 0.26em;
   text-transform: uppercase;
   color: var(--ink-muted);
 }
 
-/* Mono captions for case IDs, timestamps, ICD codes. */
+/* Mono micro-captions — tracked, pale */
 .mono-label {
-  font-family: var(--font-geist-mono), ui-monospace, monospace;
+  font-family: var(--font-jetbrains-mono), ui-monospace, monospace;
   font-size: 0.6875rem;
-  letter-spacing: 0.12em;
+  font-weight: 400;
+  letter-spacing: 0.14em;
   text-transform: uppercase;
   color: var(--ink-faint);
 }
 
-/* Decorative hairline separator (like book chapter dividers). */
+/* Hairline ornament with diamond glyph */
 .rule-ornament {
   display: flex;
   align-items: center;
-  gap: 0.75rem;
-  color: var(--ink-faint);
+  justify-content: center;
+  gap: 0.875rem;
+  color: var(--ink-whisper);
 }
 .rule-ornament::before,
 .rule-ornament::after {
   content: "";
   flex: 1;
   height: 1px;
-  background: var(--line);
+  background: linear-gradient(
+    to right,
+    transparent 0%,
+    var(--ink-whisper) 25%,
+    var(--ink-whisper) 75%,
+    transparent 100%
+  );
+}
+
+/* Diamond separator glyph */
+.diamond {
+  display: inline-block;
+  width: 5px;
+  height: 5px;
+  background: var(--ink-whisper);
+  transform: rotate(45deg);
+  margin: 0 0.4em;
+  vertical-align: middle;
+}
+
+/* Meridian — a thin, faintly gradient vertical rule */
+.meridian {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 1px;
+  background: linear-gradient(
+    to bottom,
+    transparent 0%,
+    var(--line-strong) 18%,
+    var(--line-strong) 82%,
+    transparent 100%
+  );
+  pointer-events: none;
+}
+
+/* Plate corner mark — little L-tick like an atlas plate */
+.plate-corner {
+  position: relative;
+}
+.plate-corner::before,
+.plate-corner::after {
+  content: "";
+  position: absolute;
+  background: var(--ink-muted);
+}
+.plate-corner::before {
+  top: 0;
+  left: 0;
+  width: 10px;
+  height: 1px;
+}
+.plate-corner::after {
+  top: 0;
+  left: 0;
+  width: 1px;
+  height: 10px;
+}
+
+/* Primary button — indigo, refined */
+.btn-indigo {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 2.875rem;
+  padding: 0 1.75rem;
+  background: var(--indigo);
+  color: var(--paper);
+  font-family: var(--font-instrument-sans), sans-serif;
+  font-weight: 500;
+  font-size: 0.9375rem;
+  letter-spacing: -0.005em;
+  border: 1px solid var(--indigo);
+  border-radius: 999px;
+  transition: background 180ms ease, transform 180ms ease;
+  cursor: pointer;
+}
+.btn-indigo:hover {
+  background: var(--indigo-hover);
+  border-color: var(--indigo-hover);
+}
+.btn-indigo:disabled {
+  opacity: 0.4;
+  cursor: not-allowed;
+}
+
+.btn-ghost {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5rem;
+  height: 2.875rem;
+  padding: 0 1.5rem;
+  background: transparent;
+  color: var(--ink);
+  font-family: var(--font-instrument-sans), sans-serif;
+  font-weight: 500;
+  font-size: 0.9375rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 999px;
+  transition: background 180ms ease, border-color 180ms ease;
+  cursor: pointer;
+}
+.btn-ghost:hover {
+  background: var(--paper-deep);
+  border-color: var(--line-deep);
+}
+
+/* Input & textarea base */
+.field {
+  width: 100%;
+  padding: 0.875rem 1rem;
+  border: 1px solid var(--line-strong);
+  border-radius: 12px;
+  background: var(--surface);
+  color: var(--ink);
+  font-size: 0.9375rem;
+  line-height: 1.55;
+  transition: border-color 180ms ease, box-shadow 180ms ease;
+}
+.field:focus {
+  outline: none;
+  border-color: var(--indigo);
+  box-shadow: 0 0 0 3px var(--indigo-soft);
+}
+.field::placeholder {
+  color: var(--ink-faint);
 }
 
 /* Selection */
 ::selection {
-  background: var(--clay-soft);
+  background: var(--cornflower-soft);
   color: var(--ink);
 }
 
-/* Focus rings — terracotta, subtle */
+/* Focus rings — indigo */
 :focus-visible {
-  outline: 2px solid var(--clay);
+  outline: 2px solid var(--indigo);
   outline-offset: 2px;
   border-radius: 2px;
 }
 
-/* Clerk component theming overrides — keep Clerk visuals on-brand. */
-.cl-rootBox, .cl-card {
-  --cl-primary: var(--clay);
-  --cl-primaryHover: var(--clay-hover);
+/* Subtle atlas-plate card */
+.plate-card {
+  position: relative;
   background: var(--surface);
   border: 1px solid var(--line);
-  box-shadow: 0 1px 2px rgba(24, 22, 26, 0.04), 0 8px 24px rgba(24, 22, 26, 0.06);
+  border-radius: 20px;
+  box-shadow:
+    0 1px 0 rgba(26, 35, 72, 0.02),
+    0 1px 2px rgba(26, 35, 72, 0.03),
+    0 12px 32px -12px rgba(26, 35, 72, 0.08);
+}
+
+/* A dense, scientific-journal headline number */
+.plate-counter {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-weight: 500;
+  font-size: 0.625rem;
+  letter-spacing: 0.22em;
+  text-transform: uppercase;
+  color: var(--ink-faint);
+}
+
+/* Clerk theming — cool indigo palette */
+.cl-rootBox, .cl-card {
+  --cl-primary: var(--indigo);
+  --cl-primaryHover: var(--indigo-hover);
+  background: var(--surface);
+  border: 1px solid var(--line);
+  box-shadow:
+    0 1px 2px rgba(26, 35, 72, 0.04),
+    0 8px 32px -8px rgba(26, 35, 72, 0.12);
+  border-radius: 20px;
+}
+
+/* Slow pulse used in live-busy indicators */
+@keyframes atlas-pulse {
+  0%, 100% { opacity: 0.35; }
+  50%      { opacity: 1; }
+}
+.atlas-pulse {
+  animation: atlas-pulse 2s ease-in-out infinite;
+}
+
+/* Prose — markdown rendering in the atlas aesthetic */
+.prose-atlas {
+  color: var(--ink);
+  font-size: 15px;
+  line-height: 1.65;
+}
+.prose-atlas > * + * {
+  margin-top: 0.9em;
+}
+.prose-atlas h1,
+.prose-atlas h2,
+.prose-atlas h3,
+.prose-atlas h4 {
+  font-family: var(--font-fraunces), serif;
+  font-variation-settings: "opsz" 48, "SOFT" 20, "WONK" 0;
+  color: var(--ink);
+  letter-spacing: -0.015em;
+  line-height: 1.2;
+  margin-top: 1.4em;
+}
+.prose-atlas h1 { font-size: 1.75rem; }
+.prose-atlas h2 { font-size: 1.375rem; }
+.prose-atlas h3 { font-size: 1.125rem; }
+.prose-atlas h4 { font-size: 1rem; letter-spacing: 0; }
+.prose-atlas p {
+  color: var(--ink-slate);
+}
+.prose-atlas strong {
+  color: var(--ink);
+  font-weight: 600;
+}
+.prose-atlas em {
+  font-style: italic;
+  color: var(--ink-muted);
+}
+.prose-atlas a {
+  color: var(--indigo);
+  text-decoration: underline;
+  text-decoration-color: var(--periwinkle);
+  text-underline-offset: 3px;
+  transition: text-decoration-color 180ms ease, color 180ms ease;
+}
+.prose-atlas a:hover {
+  color: var(--cornflower);
+  text-decoration-color: var(--cornflower);
+}
+.prose-atlas ul,
+.prose-atlas ol {
+  padding-left: 1.25em;
+  color: var(--ink-slate);
+}
+.prose-atlas ul { list-style: none; }
+.prose-atlas ul > li {
+  position: relative;
+  padding-left: 1em;
+}
+.prose-atlas ul > li::before {
+  content: "";
+  position: absolute;
+  left: 0;
+  top: 0.65em;
+  width: 5px;
+  height: 5px;
+  background: var(--cornflower);
+  transform: rotate(45deg);
+}
+.prose-atlas ol { list-style: decimal; }
+.prose-atlas ol > li::marker {
+  color: var(--ink-faint);
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 0.875em;
+}
+.prose-atlas li + li { margin-top: 0.35em; }
+.prose-atlas blockquote {
+  border-left: 2px solid var(--indigo);
+  padding: 0.1em 0 0.1em 1em;
+  color: var(--ink-muted);
+  font-style: italic;
+  background: var(--paper-deep);
+  border-radius: 0 8px 8px 0;
+}
+.prose-atlas code {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 0.875em;
+  background: var(--paper-deep);
+  color: var(--ink);
+  padding: 0.1em 0.35em;
+  border-radius: 4px;
+  border: 1px solid var(--line);
+}
+.prose-atlas pre {
+  background: var(--paper-lower);
+  color: var(--ink);
+  padding: 1em 1.1em;
+  border-radius: 12px;
+  border: 1px solid var(--line);
+  overflow-x: auto;
+  font-size: 0.8125rem;
+  line-height: 1.55;
+}
+.prose-atlas pre code {
+  background: transparent;
+  border: 0;
+  padding: 0;
+  font-size: inherit;
+}
+.prose-atlas hr {
+  border: 0;
+  border-top: 1px solid var(--line-strong);
+  margin: 1.6em 0;
+}
+.prose-atlas table {
+  border-collapse: collapse;
+  width: 100%;
+  font-size: 14px;
+}
+.prose-atlas th,
+.prose-atlas td {
+  border-bottom: 1px solid var(--line);
+  padding: 0.55em 0.75em;
+  text-align: left;
+}
+.prose-atlas th {
+  font-family: var(--font-jetbrains-mono), monospace;
+  font-size: 0.6875rem;
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-muted);
+  font-weight: 500;
+}
+
+/* Staggered reveal for landing hero */
+@keyframes rise {
+  from { opacity: 0; transform: translateY(12px); }
+  to   { opacity: 1; transform: translateY(0); }
+}
+.rise {
+  animation: rise 780ms cubic-bezier(0.22, 1, 0.36, 1) both;
+}
+.rise-1 { animation-delay: 80ms; }
+.rise-2 { animation-delay: 200ms; }
+.rise-3 { animation-delay: 340ms; }
+.rise-4 { animation-delay: 460ms; }
+.rise-5 { animation-delay: 600ms; }
+.rise-6 { animation-delay: 720ms; }
+
+/* Gigantic watermark numeral that lives on the hero */
+.watermark {
+  font-family: var(--font-fraunces), serif;
+  font-variation-settings: "opsz" 144, "SOFT" 0, "WONK" 1;
+  font-style: italic;
+  font-weight: 300;
+  letter-spacing: -0.06em;
+  line-height: 0.78;
+  color: transparent;
+  -webkit-text-stroke: 1px var(--line-strong);
+  user-select: none;
 }

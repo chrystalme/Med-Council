@@ -20,113 +20,172 @@ const SPECIALISTS = [
   "Urology",
 ];
 
+const PROCESS = [
+  { numeral: "I", name: "Intake", caption: "symptoms & context" },
+  { numeral: "II", name: "Follow-up", caption: "clarifying questions" },
+  { numeral: "III", name: "Council", caption: "specialist roster" },
+  { numeral: "IV", name: "Research", caption: "literature scan" },
+  { numeral: "V", name: "Consensus", caption: "cross-specialty" },
+  { numeral: "VI", name: "Plan", caption: "coordinated care" },
+  { numeral: "VII", name: "Message", caption: "for the patient" },
+];
+
 export default function LandingPage() {
   return (
     <div className="min-h-screen flex flex-col">
       {/* Masthead */}
-      <header className="px-8 md:px-14 pt-10 pb-6 flex items-center justify-between">
-        <div className="flex items-baseline gap-3">
-          <span className="font-display text-xl tracking-tight">
-            MedAI Council
+      <header className="px-8 md:px-14 pt-8 pb-5 flex items-center justify-between border-b border-line">
+        <div className="flex items-baseline gap-4">
+          <div className="flex items-center gap-2.5">
+            <span
+              aria-hidden
+              className="block h-2.5 w-2.5 rounded-sm bg-indigo rotate-45"
+            />
+            <span className="font-display text-[1.35rem] tracking-tight text-ink">
+              MedAI Council
+            </span>
+          </div>
+          <span className="mono-label hidden sm:inline">
+            An Atlas <span className="diamond" /> Edition III
           </span>
-          <span className="mono-label hidden sm:inline">Edition III</span>
         </div>
-        <div className="mono-label">Case №0000 — Pending</div>
+        <div className="mono-label flex items-center gap-3">
+          <span className="hidden md:inline">Plate 00 <span className="diamond" /> Cover</span>
+          <span className="inline-flex items-center gap-1.5">
+            <span className="h-1.5 w-1.5 rounded-full bg-cornflower atlas-pulse" />
+            system online
+          </span>
+        </div>
       </header>
 
-      <div className="rule-ornament px-8 md:px-14 mb-10">
-        <span className="font-display italic text-sm text-ink-muted">
-          ·&nbsp;&nbsp;a clinical deliberation&nbsp;&nbsp;·
-        </span>
-      </div>
+      {/* Hero — asymmetric, with a gigantic XVI watermark */}
+      <main className="relative flex-1 px-6 md:px-14 pt-16 pb-20">
+        <div className="grid grid-cols-12 gap-x-6 gap-y-10">
+          {/* Left: eyebrow + headline + body + CTAs */}
+          <section className="col-span-12 lg:col-span-8 relative">
+            <div className="flex items-center gap-3 mb-6 rise rise-1">
+              <span className="stage-marker">Prolegomenon</span>
+              <span className="h-px w-16 bg-line-strong" />
+              <span className="plate-counter">Plate I</span>
+            </div>
 
-      {/* Hero */}
-      <main className="flex-1 px-8 md:px-14 grid grid-cols-12 gap-6 pb-20">
-        <section className="col-span-12 md:col-span-8">
-          <p className="stage-marker mb-8">Prolegomenon — I</p>
+            <h1 className="font-display text-[clamp(2.75rem,7vw,6.5rem)] leading-[0.98] text-ink mb-8 text-balance rise rise-2">
+              Sixteen&nbsp;specialists.
+              <br />
+              <em className="italic text-indigo font-normal">One</em>{" "}
+              deliberation.
+              <br />
+              A single, considered
+              <br />
+              <em className="italic">assessment.</em>
+            </h1>
 
-          <h1 className="font-display text-[clamp(2.5rem,6vw,5.25rem)] leading-[1.04] text-ink mb-10">
-            Sixteen specialists.
-            <br />
-            <em className="italic text-clay">One</em> deliberation.
-            <br />
-            A single, considered <em className="italic">assessment.</em>
-          </h1>
+            <div className="flex items-center gap-4 mb-10 rise rise-3">
+              <span className="h-px w-12 bg-ink-whisper" />
+              <span className="diamond" />
+              <span className="h-px w-12 bg-ink-whisper" />
+            </div>
 
-          <p className="text-lg md:text-xl text-ink-muted max-w-2xl leading-relaxed mb-12 text-pretty">
-            Describe a symptom in plain language. A council of reasoning
-            specialists — cardiology, neurology, endocrinology and thirteen
-            more — deliberates, consults the literature, and returns a
-            diagnosis, a plan, and a message you can act on.
-          </p>
+            <p className="text-[1.125rem] md:text-[1.1875rem] text-ink-slate max-w-[46ch] leading-relaxed mb-10 text-pretty rise rise-4">
+              Describe a symptom in plain language. A council of reasoning
+              specialists — cardiology, neurology, endocrinology, and thirteen
+              more — deliberates, consults the literature, and returns a
+              diagnosis, a plan, and a message you can act on.
+            </p>
 
-          <div className="flex flex-wrap items-center gap-4">
-            <Show when="signed-out">
-              <SignUpButton mode="modal"><button className="h-12 px-7 bg-clay text-paper font-medium text-[15px] tracking-tight rounded-full hover:bg-clay-hover transition-colors cursor-pointer">Begin a consultation</button></SignUpButton>
-              <SignInButton mode="modal"><button className="h-12 px-6 text-ink font-medium text-[15px] tracking-tight rounded-full border border-line-strong hover:bg-paper-deep transition-colors cursor-pointer">I already have an account</button></SignInButton>
-            </Show>
-            <Show when="signed-in">
-              <Link
-                href="/case"
-                className="h-12 px-7 inline-flex items-center bg-clay text-paper font-medium text-[15px] tracking-tight rounded-full hover:bg-clay-hover transition-colors"
-              >
-                Continue to the council →
-              </Link>
-            </Show>
+            <div className="flex flex-wrap items-center gap-3 mb-6 rise rise-5">
+              <Show when="signed-out">
+                <SignUpButton mode="modal"><button className="btn-indigo">Begin a consultation →</button></SignUpButton>
+                <SignInButton mode="modal"><button className="btn-ghost">I already have an account</button></SignInButton>
+              </Show>
+              <Show when="signed-in">
+                <Link href="/case" className="btn-indigo">
+                  Continue to the council
+                  <span aria-hidden>→</span>
+                </Link>
+              </Show>
+            </div>
+
+            <p className="mono-label max-w-md leading-relaxed rise rise-6">
+              Demonstration only <span className="diamond" /> outputs are not a
+              substitute for licensed medical advice
+            </p>
+          </section>
+
+          {/* Right: Specialist register — typographic atlas sidebar */}
+          <aside className="col-span-12 lg:col-span-4 relative lg:pl-10 lg:border-l lg:border-line">
+            {/* Gigantic watermark XVI sitting behind the register */}
+            <div
+              aria-hidden
+              className="hidden lg:block absolute -top-6 -right-6 z-0 watermark text-[18rem] rise rise-2"
+            >
+              XVI
+            </div>
+
+            <div className="relative z-10">
+              <div className="flex items-center justify-between mb-5 rise rise-3">
+                <span className="stage-marker">The register</span>
+                <span className="plate-counter">16 seats</span>
+              </div>
+              <ol className="space-y-[0.35rem] rise rise-4">
+                {SPECIALISTS.map((s, i) => (
+                  <li
+                    key={s}
+                    className="group flex items-baseline gap-4 py-1.5 border-b border-line/70 last:border-b-0"
+                  >
+                    <span className="plate-counter w-7 tabular-nums text-ink-faint">
+                      {String(i + 1).padStart(2, "0")}
+                    </span>
+                    <span className="font-display text-[1.0625rem] text-ink leading-tight group-hover:text-indigo transition-colors">
+                      {s}
+                    </span>
+                  </li>
+                ))}
+              </ol>
+              <p className="mono-label mt-7 leading-relaxed max-w-[28ch] rise rise-5">
+                Four to six specialists are selected per case. The full roster
+                deliberates when the evidence is ambiguous.
+              </p>
+            </div>
+          </aside>
+        </div>
+      </main>
+
+      {/* Process rail — horizontal atlas strip */}
+      <section className="border-t border-line bg-paper-deep/60 relative">
+        <div className="absolute inset-x-0 top-0 h-px bg-gradient-to-r from-transparent via-line-deep to-transparent" />
+        <div className="px-6 md:px-14 py-10 md:py-14">
+          <div className="flex items-center gap-4 mb-8">
+            <span className="stage-marker">Method</span>
+            <span className="h-px flex-1 bg-line-strong" />
+            <span className="plate-counter">seven plates</span>
           </div>
-
-          <p className="mono-label mt-10 max-w-md leading-relaxed">
-            Demonstration only. Outputs are not a substitute for licensed
-            medical advice.
-          </p>
-        </section>
-
-        {/* Specialist roster — typographic decoration */}
-        <aside className="hidden md:block md:col-span-4 md:border-l md:border-line md:pl-8">
-          <p className="stage-marker mb-6">The council · sixteen seats</p>
-          <ol className="space-y-2.5 font-display text-[15px] text-ink leading-tight">
-            {SPECIALISTS.map((s, i) => (
-              <li key={s} className="flex items-baseline gap-3">
-                <span className="mono-label w-6 text-right text-ink-faint">
-                  {String(i + 1).padStart(2, "0")}
-                </span>
-                <span>{s}</span>
+          <ol className="grid grid-cols-2 sm:grid-cols-4 lg:grid-cols-7 gap-x-6 gap-y-8">
+            {PROCESS.map((s) => (
+              <li key={s.name} className="relative pl-4 border-l border-line-strong">
+                <p className="plate-numeral text-[2.5rem] mb-1 text-indigo">
+                  {s.numeral}
+                </p>
+                <p className="font-display text-[1.125rem] text-ink leading-tight">
+                  {s.name}
+                </p>
+                <p className="mono-label mt-1.5 normal-case tracking-wider text-ink-faint">
+                  {s.caption}
+                </p>
               </li>
             ))}
           </ol>
-          <p className="mono-label mt-8 leading-relaxed">
-            Four to six specialists are selected per case. The full roster
-            deliberates when the evidence is ambiguous.
-          </p>
-        </aside>
-      </main>
-
-      {/* Process strip — editorial footnote */}
-      <section className="border-t border-line bg-paper-deep/60">
-        <div className="px-8 md:px-14 py-10 grid grid-cols-2 md:grid-cols-7 gap-6 max-w-6xl">
-          {[
-            "Intake",
-            "Triage",
-            "Council",
-            "Research",
-            "Consensus",
-            "Plan",
-            "Message",
-          ].map((stage, i) => (
-            <div key={stage}>
-              <p className="stage-marker">
-                {["I", "II", "III", "IV", "V", "VI", "VII"][i]}
-              </p>
-              <p className="font-display text-lg text-ink mt-1">{stage}</p>
-            </div>
-          ))}
         </div>
       </section>
 
-      <footer className="px-8 md:px-14 py-6 flex items-center justify-between border-t border-line mono-label">
-        <span>MedAI Council · a research artefact</span>
+      {/* Footer colophon */}
+      <footer className="px-6 md:px-14 py-6 flex flex-wrap items-center justify-between gap-3 border-t border-line mono-label">
         <span>
-          Inference · OpenRouter · nvidia/nemotron-3-super-120b-a12b:free
+          MedAI Council <span className="diamond" /> a research artefact
+        </span>
+        <span>
+          Inference <span className="diamond" /> OpenRouter{" "}
+          <span className="diamond" /> nvidia/nemotron-3-super-120b-a12b
         </span>
       </footer>
     </div>
