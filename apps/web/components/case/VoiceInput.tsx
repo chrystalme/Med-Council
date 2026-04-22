@@ -2,7 +2,7 @@
 
 import { useAuth } from "@clerk/nextjs";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { councilFetch } from "@/lib/council-api";
+import { CouncilApiError, councilFetch, type CouncilErrorDetail } from "@/lib/council-api";
 import { useIsPro } from "@/lib/entitlements";
 
 type Props = {
@@ -11,6 +11,8 @@ type Props = {
   disabled?: boolean;
   /** Short label for the screen-reader. */
   label?: string;
+  /** Called on 402/415 server errors so callers can show an upgrade modal. */
+  onPaywallError?: (err: unknown) => void;
 };
 
 type Mode = "browser" | "server";
@@ -40,7 +42,7 @@ function createBrowserRecognition(): Recognition | null {
   return rec;
 }
 
-export function VoiceInput({ onTranscript, disabled, label = "Voice input" }: Props) {
+export function VoiceInput({ onTranscript, disabled, label = "Voice input", onPaywallError }: Props) {
   const { getToken } = useAuth();
   const isPro = useIsPro();
   const mode: Mode = isPro ? "server" : "browser";
@@ -150,12 +152,26 @@ export function VoiceInput({ onTranscript, disabled, label = "Voice input" }: Pr
           });
           if (!res.ok) {
             const body = await res.text();
-            throw new Error(body || `HTTP ${res.status}`);
+            let msg = body.slice(0, 200) || `HTTP ${res.status}`;
+            let code: string | undefined;
+            let detail: CouncilErrorDetail | string | undefined = body;
+            try {
+              const parsed = JSON.parse(body);
+              detail = parsed?.detail;
+              if (detail && typeof detail === "object") {
+                msg = (detail as CouncilErrorDetail).message ?? msg;
+                code = (detail as CouncilErrorDetail).code;
+              }
+            } catch {
+              /* ignore */
+            }
+            throw new CouncilApiError(msg, { status: res.status, code, detail });
           }
           const data = (await res.json()) as { text: string };
           if (data.text) onTranscript(data.text);
         } catch (exc) {
           setErr(exc instanceof Error ? exc.message : "Transcription failed.");
+          onPaywallError?.(exc);
         } finally {
           setProcessing(false);
         }
@@ -166,7 +182,7 @@ export function VoiceInput({ onTranscript, disabled, label = "Voice input" }: Pr
     } catch (exc) {
       setErr(exc instanceof Error ? exc.message : "Mic access was denied.");
     }
-  }, [getToken, onTranscript]);
+  }, [getToken, onTranscript, onPaywallError]);
 
   const onClick = () => {
     if (disabled || processing) return;

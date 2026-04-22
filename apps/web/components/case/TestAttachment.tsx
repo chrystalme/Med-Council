@@ -2,7 +2,12 @@
 
 import { useAuth } from "@clerk/nextjs";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { councilFetch, councilJson } from "@/lib/council-api";
+import {
+  CouncilApiError,
+  councilFetch,
+  councilJson,
+  type CouncilErrorDetail,
+} from "@/lib/council-api";
 
 export type AttachmentRow = {
   id: string;
@@ -27,10 +32,12 @@ export function TestAttachment({
   caseId,
   questionIndex,
   onChange,
+  onPaywallError,
 }: {
   caseId: string | null;
   questionIndex: number;
   onChange?: () => void;
+  onPaywallError?: (err: unknown) => void;
 }) {
   const { getToken } = useAuth();
   const [rows, setRows] = useState<AttachmentRow[]>([]);
@@ -80,13 +87,25 @@ export function TestAttachment({
         if (!res.ok) {
           const body = await res.text();
           let msg = body.slice(0, 200);
+          let code: string | undefined;
+          let detail: CouncilErrorDetail | string | undefined = body;
           try {
             const parsed = JSON.parse(body);
-            msg = parsed?.detail?.message ?? msg;
+            detail = parsed?.detail;
+            if (detail && typeof detail === "object") {
+              msg = (detail as CouncilErrorDetail).message ?? msg;
+              code = (detail as CouncilErrorDetail).code;
+            } else if (typeof detail === "string") {
+              msg = detail;
+            }
           } catch {
             /* ignore */
           }
-          throw new Error(msg);
+          throw new CouncilApiError(msg, {
+            status: res.status,
+            code,
+            detail,
+          });
         }
         await refresh();
         onChange?.();
@@ -95,9 +114,10 @@ export function TestAttachment({
       } catch (e) {
         setErr(e instanceof Error ? e.message : "Upload failed");
         setStatus(null);
+        onPaywallError?.(e);
       }
     },
-    [caseId, getToken, onChange, refresh]
+    [caseId, getToken, onChange, onPaywallError, refresh]
   );
 
   const onFileChange = useCallback(

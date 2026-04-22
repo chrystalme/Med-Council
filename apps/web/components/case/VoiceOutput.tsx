@@ -2,7 +2,7 @@
 
 import { useAuth } from "@clerk/nextjs";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { councilFetch } from "@/lib/council-api";
+import { CouncilApiError, councilFetch, type CouncilErrorDetail } from "@/lib/council-api";
 import { useIsPro } from "@/lib/entitlements";
 
 type Props = {
@@ -12,6 +12,8 @@ type Props = {
   /** Tooltip / SR label. */
   label?: string;
   disabled?: boolean;
+  /** Called on 402/415 so the parent can open an upgrade modal. */
+  onPaywallError?: (err: unknown) => void;
 };
 
 export function VoiceOutput({
@@ -19,6 +21,7 @@ export function VoiceOutput({
   voice = "alloy",
   label = "Read aloud",
   disabled,
+  onPaywallError,
 }: Props) {
   const { getToken } = useAuth();
   const isPro = useIsPro();
@@ -84,7 +87,20 @@ export function VoiceOutput({
       });
       if (!res.ok) {
         const body = await res.text();
-        throw new Error(body.slice(0, 200) || `HTTP ${res.status}`);
+        let msg = body.slice(0, 200) || `HTTP ${res.status}`;
+        let code: string | undefined;
+        let detail: CouncilErrorDetail | string | undefined = body;
+        try {
+          const parsed = JSON.parse(body);
+          detail = parsed?.detail;
+          if (detail && typeof detail === "object") {
+            msg = (detail as CouncilErrorDetail).message ?? msg;
+            code = (detail as CouncilErrorDetail).code;
+          }
+        } catch {
+          /* ignore */
+        }
+        throw new CouncilApiError(msg, { status: res.status, code, detail });
       }
       const blob = await res.blob();
       const url = URL.createObjectURL(blob);
@@ -103,10 +119,11 @@ export function VoiceOutput({
       setPlaying(true);
     } catch (exc) {
       setErr(exc instanceof Error ? exc.message : "TTS failed.");
+      onPaywallError?.(exc);
     } finally {
       setLoading(false);
     }
-  }, [getToken, text, voice]);
+  }, [getToken, text, voice, onPaywallError]);
 
   const onClick = () => {
     if (disabled || loading || !text.trim()) return;

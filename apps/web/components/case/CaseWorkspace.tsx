@@ -11,6 +11,7 @@ import { VoiceInput } from './VoiceInput';
 import { VoiceOutput } from './VoiceOutput';
 import { PatientContext } from './PatientContext';
 import { TestAttachment } from './TestAttachment';
+import { UpgradeModal, useUpgradePrompt } from './UpgradeModal';
 
 type Physician = {
   id: string;
@@ -95,6 +96,7 @@ export function CaseWorkspace() {
   const [caseId, setCaseId] = useState<string | null>(null);
   const [consultationSaveError, setConsultationSaveError] = useState<string | null>(null);
   const consultationSavedRef = useRef<string | null>(null);
+  const upgrade = useUpgradePrompt();
 
   const advanceTo = useCallback((n: number) => {
     setStep(n);
@@ -545,8 +547,9 @@ export function CaseWorkspace() {
     } catch (e) {
       consultationSavedRef.current = null;  // allow retry
       setConsultationSaveError(e instanceof Error ? e.message : 'Save failed');
+      upgrade.show(e);
     }
-  }, [caseId, consensus, message, plan, symptoms, tokenFn]);
+  }, [caseId, consensus, message, plan, symptoms, tokenFn, upgrade]);
 
   useEffect(() => {
     if (step === 7 && consensus && caseId && !consultationSaveError) {
@@ -653,6 +656,7 @@ export function CaseWorkspace() {
 
   return (
     <div className='space-y-10'>
+      <UpgradeModal prompt={upgrade.prompt} onClose={upgrade.close} />
       <PaywallBanner />
 
       {/* Stage timeline — horizontal on desktop, with numerals + status dots */}
@@ -775,6 +779,7 @@ export function CaseWorkspace() {
               <VoiceInput
                 label='Dictate symptoms'
                 disabled={!!busy}
+                onPaywallError={upgrade.show}
                 onTranscript={(t) =>
                   setSymptoms((s) => (s ? `${s.trimEnd()} ${t}` : t))
                 }
@@ -827,7 +832,7 @@ export function CaseWorkspace() {
                     <p className='font-display text-[1.05rem] text-ink leading-snug flex-1'>
                       {q}
                     </p>
-                    <VoiceOutput text={q} label={`Read question ${i + 1}`} />
+                    <VoiceOutput text={q} label={`Read question ${i + 1}`} onPaywallError={upgrade.show} />
                   </div>
                   <textarea
                     className='field min-h-[88px]'
@@ -845,6 +850,7 @@ export function CaseWorkspace() {
                     <VoiceInput
                       label={`Dictate answer to Q${i + 1}`}
                       disabled={!!busy}
+                      onPaywallError={upgrade.show}
                       onTranscript={(t) =>
                         setFqAnswers((prev) => {
                           const n = [...prev];
@@ -858,6 +864,7 @@ export function CaseWorkspace() {
                   <TestAttachment
                     caseId={caseId}
                     questionIndex={i}
+                    onPaywallError={upgrade.show}
                   />
                 </li>
               ))}
@@ -1089,7 +1096,7 @@ export function CaseWorkspace() {
                   table.
                 </p>
               </div>
-              <VoiceOutput text={message} label='Read patient message aloud' />
+              <VoiceOutput text={message} label='Read patient message aloud' onPaywallError={upgrade.show} />
             </div>
 
             <div className='rounded-xl border border-line bg-surface p-6'>
@@ -1130,6 +1137,7 @@ export function CaseWorkspace() {
                 <VoiceInput
                   label='Dictate follow-up question'
                   disabled={!!busy}
+                  onPaywallError={upgrade.show}
                   onTranscript={(t) =>
                     setFollowupQ((s) => (s ? `${s.trimEnd()} ${t}` : t))
                   }
@@ -1139,7 +1147,7 @@ export function CaseWorkspace() {
                 <div className='mt-4 border-t border-line pt-4'>
                   <div className='flex items-start justify-between gap-3 mb-2'>
                     <span className='mono-label'>Council reply</span>
-                    <VoiceOutput text={followupReply} label='Read reply aloud' />
+                    <VoiceOutput text={followupReply} label='Read reply aloud' onPaywallError={upgrade.show} />
                   </div>
                   <Markdown>{followupReply}</Markdown>
                 </div>
