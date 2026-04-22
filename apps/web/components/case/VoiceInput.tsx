@@ -44,7 +44,7 @@ function createBrowserRecognition(): Recognition | null {
 
 export function VoiceInput({ onTranscript, disabled, label = "Voice input", onPaywallError }: Props) {
   const { getToken } = useAuth();
-  const isPro = useIsPro();
+  const { isPro } = useIsPro();
   const mode: Mode = isPro ? "server" : "browser";
 
   const [listening, setListening] = useState(false);

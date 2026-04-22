@@ -810,24 +810,50 @@ _FEEDBACK_PAGE = """<!doctype html>
 
 @app.get("/api/me")
 async def me(
+    request: Request,
     user: Optional[AuthUser] = Depends(current_user_maybe_required),
+    debug: int = 0,
+    refresh: int = 0,
 ):
     """Return the resolved plan + basic profile for the current session.
 
-    The frontend uses this as the authoritative tier check. Reading the
-    plan from a single source (the same `effective_plan()` helper the
-    server's paywall uses) avoids the common pitfall of the client-side
-    `has({plan})` helper returning false when the JWT template isn't
-    configured to surface plan claims.
+    Query params:
+      ?debug=1   — also return the raw JWT claims + admin-API result so you
+                   can see exactly what Clerk is sending.
+      ?refresh=1 — bust the Clerk admin-API plan cache for this user (useful
+                   immediately after subscribing so you don't have to wait
+                   up to 60s for the cache to expire).
     """
-    from auth import effective_plan
+    from auth import effective_plan, invalidate_plan_cache, _plan_from_clerk_api
+
+    if refresh and user:
+        invalidate_plan_cache(user.user_id)
 
     plan = effective_plan(user)
-    return {
+    payload: dict[str, Any] = {
         "user_id": user.user_id if user else None,
         "email": user.email if user else None,
         "plan": plan,
     }
+
+    if debug:
+        # Decode the JWT without re-verifying (already verified upstream).
+        import jwt as _jwt
+
+        token = (request.headers.get("authorization") or "").removeprefix("Bearer ").strip()
+        raw_claims: dict[str, Any] = {}
+        if token:
+            try:
+                raw_claims = _jwt.decode(token, options={"verify_signature": False})
+            except Exception as exc:
+                raw_claims = {"__decode_error__": str(exc)}
+        payload["debug"] = {
+            "jwt_plan_from_claims": user.plan if user else None,
+            "clerk_api_plan": _plan_from_clerk_api(user.user_id) if user else "free",
+            "raw_claims": raw_claims,
+        }
+
+    return payload
 
 
 @app.get("/api/models")

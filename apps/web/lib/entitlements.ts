@@ -1,7 +1,7 @@
 "use client";
 
-import { useAuth } from "@clerk/nextjs";
-import { useEffect, useState } from "react";
+import { useAuth, useSession } from "@clerk/nextjs";
+import { useCallback, useEffect, useState } from "react";
 import { councilJson } from "@/lib/council-api";
 
 const DEV_FORCE_PRO =
@@ -25,54 +25,93 @@ type MeResponse = {
  *   3. Clerk's client-side has({plan}) helper as a fallback when the
  *      backend is unreachable.
  */
-export function useIsPro(): boolean {
+export function useIsPro(): { isPro: boolean; refresh: () => Promise<void> } {
   const { has, isLoaded, isSignedIn, getToken } = useAuth();
+  const { session } = useSession();
   const [serverPlan, setServerPlan] = useState<"free" | "pro" | null>(null);
 
-  useEffect(() => {
-    if (!isLoaded || !isSignedIn) {
-      setServerPlan(null);
-      return;
-    }
-    let cancelled = false;
-    (async () => {
+  const fetchPlan = useCallback(
+    async (force = false) => {
+      if (!isSignedIn) {
+        setServerPlan(null);
+        return;
+      }
       try {
-        const tok = await getToken().catch(() => null);
-        const data = await councilJson<MeResponse>("/api/me", {
+        // Force a fresh session token — on an upgrade the old token lacks
+        // the new plan claim, and the Clerk Admin API cache on the server
+        // may also be stale. `session.touch()` + `getToken({skipCache:true})`
+        // refreshes the session so the next /api/me call reflects reality.
+        if (force && session) {
+          try {
+            await session.touch?.();
+          } catch {
+            /* ignore */
+          }
+        }
+        const tok = await getToken({ skipCache: force }).catch(() => null);
+        const url = force ? "/api/me?refresh=1" : "/api/me";
+        const data = await councilJson<MeResponse>(url, {
           method: "GET",
           token: tok,
         });
-        if (!cancelled) setServerPlan(data.plan);
+        setServerPlan(data.plan);
       } catch {
-        /* keep null — fall through to client-side has() */
+        /* keep previous state — fall through to client-side has() */
       }
-    })();
-    return () => {
-      cancelled = true;
-    };
-  }, [isLoaded, isSignedIn, getToken]);
+    },
+    [getToken, isSignedIn, session]
+  );
 
-  if (DEV_FORCE_PRO) return true;
-  if (serverPlan === "pro") return true;
-  if (serverPlan === "free") return false;
+  useEffect(() => {
+    if (!isLoaded) return;
+    void fetchPlan(false);
+    // Re-fetch every 30s while mounted so an upgrade propagates without
+    // requiring a manual refresh. Cheap: just one /api/me call.
+    const t = setInterval(() => void fetchPlan(false), 30_000);
+    return () => clearInterval(t);
+  }, [isLoaded, fetchPlan]);
 
-  // Server hasn't answered yet — try the Clerk client helper as a last
-  // resort. This only works if the JWT template surfaces plan claims.
-  if (!isLoaded) return false;
-  try {
-    const slugs = [
-      "pro",
-      "pro_plan",
-      "pro_monthly",
-      "pro_yearly",
-      "medai_pro",
-      "premium",
-    ];
-    for (const slug of slugs) {
-      if (has?.({ plan: slug })) return true;
+  // Also re-fetch whenever the window gains focus — users typically return
+  // from the Clerk billing portal via a new tab, and focusing the app tab
+  // is the natural moment to rehydrate their plan.
+  useEffect(() => {
+    const onFocus = () => void fetchPlan(true);
+    if (typeof window !== "undefined") {
+      window.addEventListener("focus", onFocus);
+      return () => window.removeEventListener("focus", onFocus);
     }
-  } catch {
-    /* Billing not enabled in client SDK */
+  }, [fetchPlan]);
+
+  const refresh = useCallback(() => fetchPlan(true), [fetchPlan]);
+
+  let isPro = false;
+  if (DEV_FORCE_PRO) {
+    isPro = true;
+  } else if (serverPlan === "pro") {
+    isPro = true;
+  } else if (serverPlan === "free") {
+    isPro = false;
+  } else if (isLoaded) {
+    // Server hasn't answered yet — Clerk client helper as a last resort.
+    try {
+      const slugs = [
+        "pro",
+        "pro_plan",
+        "pro_monthly",
+        "pro_yearly",
+        "medai_pro",
+        "premium",
+      ];
+      for (const slug of slugs) {
+        if (has?.({ plan: slug })) {
+          isPro = true;
+          break;
+        }
+      }
+    } catch {
+      /* Billing not enabled in client SDK */
+    }
   }
-  return false;
+
+  return { isPro, refresh };
 }

@@ -118,11 +118,33 @@ _plan_cache: dict[str, tuple[float, PlanLiteral]] = {}
 _PLAN_CACHE_TTL = 60.0
 
 
-def _plan_from_clerk_api(user_id: str) -> PlanLiteral:
-    """Look up the user's public metadata via the Clerk Backend API.
+def _clerk_get(path: str, secret: str) -> Any:
+    """GET a path under the Clerk Backend API. Returns parsed JSON or None."""
+    url = f"{_CLERK_API_BASE}{path}"
+    req = _urllib_req.Request(
+        url,
+        method="GET",
+        headers={
+            "Authorization": f"Bearer {secret}",
+            "Accept": "application/json",
+        },
+    )
+    try:
+        with _urllib_req.urlopen(req, timeout=4) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+        return _json.loads(body)
+    except (_urllib_err.URLError, _urllib_err.HTTPError, ValueError, TimeoutError):
+        return None
+    except Exception:
+        return None
 
-    Returns 'pro' when public_metadata.plan looks Pro, else 'free'. Silent
-    on any transport/permission error so this never blocks a request.
+
+def _plan_from_clerk_api(user_id: str) -> PlanLiteral:
+    """Look up the user's active plan via the Clerk Backend API.
+
+    Clerk Billing exposes subscriptions under `/commerce/...`. The endpoints
+    have shifted during v7, so we probe multiple known shapes and also fall
+    back to public_metadata.plan for manual installs. Cached 60s per user.
     """
     secret = os.environ.get("CLERK_SECRET_KEY", "").strip()
     if not secret or not user_id:
@@ -133,30 +155,45 @@ def _plan_from_clerk_api(user_id: str) -> PlanLiteral:
     if hit and now - hit[0] < _PLAN_CACHE_TTL:
         return hit[1]
 
-    url = f"{_CLERK_API_BASE}/users/{user_id}"
-    req = _urllib_req.Request(
-        url,
-        method="GET",
-        headers={
-            "Authorization": f"Bearer {secret}",
-            "Accept": "application/json",
-        },
-    )
     plan: PlanLiteral = "free"
-    try:
-        with _urllib_req.urlopen(req, timeout=4) as resp:
-            body = resp.read().decode("utf-8", errors="replace")
-        data = _json.loads(body)
-        pm = data.get("public_metadata") or {}
-        if _looks_pro(pm.get("plan")):
+
+    # 1) Billing / commerce endpoints. Try each — the one that works on your
+    # Clerk instance will return 200; the others 404 silently. The response
+    # shapes include {plan: {slug}}, {plans: [...]}, {subscription: {plan: ...}}.
+    billing_paths = [
+        f"/users/{user_id}/billing/subscription",
+        f"/users/{user_id}/billing",
+        f"/commerce/users/{user_id}/subscriptions",
+        f"/commerce/subscriptions?user_id={user_id}",
+    ]
+    for path in billing_paths:
+        data = _clerk_get(path, secret)
+        if not data:
+            continue
+        if _looks_pro(data):
             plan = "pro"
-    except (_urllib_err.URLError, _urllib_err.HTTPError, ValueError, TimeoutError):
-        plan = "free"
-    except Exception:
-        plan = "free"
+            break
+
+    # 2) Fallback: user record public metadata (manual setup).
+    if plan != "pro":
+        data = _clerk_get(f"/users/{user_id}", secret)
+        if isinstance(data, dict):
+            for key in ("public_metadata", "unsafe_metadata", "private_metadata"):
+                md = data.get(key)
+                if isinstance(md, dict) and _looks_pro(md.get("plan")):
+                    plan = "pro"
+                    break
 
     _plan_cache[user_id] = (now, plan)
     return plan
+
+
+def invalidate_plan_cache(user_id: str | None = None) -> None:
+    """Clear the cached Clerk admin plan lookup for one or all users."""
+    if user_id:
+        _plan_cache.pop(user_id, None)
+    else:
+        _plan_cache.clear()
 
 
 @lru_cache(maxsize=1)

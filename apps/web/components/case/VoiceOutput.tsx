@@ -24,7 +24,7 @@ export function VoiceOutput({
   onPaywallError,
 }: Props) {
   const { getToken } = useAuth();
-  const isPro = useIsPro();
+  const { isPro } = useIsPro();
 
   const [playing, setPlaying] = useState(false);
   const [loading, setLoading] = useState(false);

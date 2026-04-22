@@ -1,6 +1,7 @@
 "use client";
 
 import Link from "next/link";
+import { useState } from "react";
 import { useIsPro } from "@/lib/entitlements";
 
 /**
@@ -12,7 +13,8 @@ import { useIsPro } from "@/lib/entitlements";
  * in as a Pro user.
  */
 export function PaywallBanner() {
-  const isPro = useIsPro();
+  const { isPro, refresh } = useIsPro();
+  const [refreshing, setRefreshing] = useState(false);
   if (isPro) return null;
   if (process.env.NEXT_PUBLIC_FEATURE_PAYWALL !== "1") return null;
 
@@ -29,6 +31,19 @@ export function PaywallBanner() {
             5 test attachments per case (1 MB each). Upgrade for premium models,
             Whisper voice, unlimited memory, and 10 MB × 20 attachments.
           </p>
+          <button
+            type="button"
+            onClick={async () => {
+              setRefreshing(true);
+              await refresh();
+              setRefreshing(false);
+            }}
+            disabled={refreshing}
+            className="mono-label text-ink-muted hover:text-indigo transition-colors mt-2 inline-flex items-center gap-1.5"
+          >
+            <span aria-hidden>⟳</span>
+            {refreshing ? "refreshing plan…" : "just upgraded? refresh plan"}
+          </button>
         </div>
         <Link href="/#pricing" className="btn-indigo shrink-0">
           Upgrade to Pro →

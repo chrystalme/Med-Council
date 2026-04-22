@@ -23,7 +23,7 @@ export function EmailToPatient({
   onPaywallError,
 }: Props) {
   const { getToken } = useAuth();
-  const isPro = useIsPro();
+  const { isPro } = useIsPro();
 
   const [open, setOpen] = useState(false);
   const [to, setTo] = useState("");
