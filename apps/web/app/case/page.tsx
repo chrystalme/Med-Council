@@ -28,6 +28,12 @@ export default async function CaseWorkspacePage() {
           </span>
         </Link>
         <div className="flex items-center gap-5">
+          <Link
+            href="/patient"
+            className="mono-label hover:text-indigo transition-colors hidden sm:inline"
+          >
+            Patient file →
+          </Link>
           <span className="mono-label hidden md:inline">
             Attending <span className="diamond" /> {userId?.slice(-8) ?? "—"}
           </span>

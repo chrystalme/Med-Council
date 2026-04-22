@@ -109,7 +109,11 @@ def _init_feedback_db() -> None:
 
 
 def _init_cases_db() -> None:
-    """Step 3 — persisted case drafts (SQLite, same file as feedback)."""
+    """Step 3 — persisted case drafts (SQLite, same file as feedback).
+
+    Also initialises the patient memory schema (consultations + vector embeddings)
+    and the case attachments schema (Phase 3.5). All share feedback.db.
+    """
     con = sqlite3.connect(str(_DB_PATH))
     con.execute(
         """CREATE TABLE IF NOT EXISTS cases (
@@ -121,7 +125,41 @@ def _init_cases_db() -> None:
                updated_at TEXT NOT NULL
            )"""
     )
+    con.execute(
+        """CREATE TABLE IF NOT EXISTS consultations (
+               id           TEXT PRIMARY KEY,
+               user_id      TEXT NOT NULL,
+               case_id      TEXT NOT NULL,
+               summary      TEXT NOT NULL,
+               primary_dx   TEXT,
+               icd_code     TEXT,
+               urgency      TEXT,
+               confidence   INTEGER,
+               created_at   TEXT NOT NULL
+           )"""
+    )
+    con.execute(
+        "CREATE INDEX IF NOT EXISTS idx_consultations_user ON consultations(user_id)"
+    )
     con.commit()
+
+    # Vector embeddings table (used by SqliteVectorStore for patient memory).
+    from vector_store import get_vector_store
+
+    try:
+        get_vector_store().ensure_schema(con)
+    except NotImplementedError:
+        # Vertex backend — schema lives elsewhere.
+        pass
+
+    # Attachments table (Phase 3.5).
+    from attachments import get_attachment_store
+
+    try:
+        get_attachment_store().ensure_schema(con)
+    except NotImplementedError:
+        pass
+
     con.close()
 
 
@@ -452,9 +490,13 @@ class _ModeledRequest(BaseModel):
     The key must match an entry in council_registry.MODELS. Free-tier users
     asking for a Pro model are silently downgraded (see resolve_model),
     with X-Model-Downgraded: 1 set on the response.
+
+    Also an optional `case_id` so Phase 3.5 attachments can be fetched and
+    injected into the prompt without needing a separate lookup roundtrip.
     """
 
     model: str | None = None
+    case_id: str | None = None
 
 
 class TriageIn(_ModeledRequest):
@@ -978,11 +1020,13 @@ async def council_specialist(
         )
 
     ctx = _council_context_block(req.council_context)
+    memory = _retrieve_patient_context(_cases_user_id(user), req.symptoms)
     prompt = (
         f"Patient symptoms: {req.symptoms}\n\n"
         f"Patient follow-up responses: {req.followup_answers}"
         f"{ctx}"
         f"{prior_block}"
+        + (f"\n\n{memory}" if memory else "")
     )
 
     specialist_name = SPECIALIST_META[req.specialist_id]["name"]
@@ -1025,11 +1069,15 @@ async def council_physician(
         )
 
     ctx = _council_context_block(req.council_context)
+    memory = _retrieve_patient_context(_cases_user_id(user), req.symptoms)
+    attachments_block = _attachment_block_for_case(req.case_id) if req.case_id else ""
     prompt = (
         f"Patient symptoms: {req.symptoms}\n\n"
         f"Patient follow-up responses: {req.followup_answers}"
         f"{ctx}"
         f"{prior_block}"
+        + (f"\n\n{attachments_block}" if attachments_block else "")
+        + (f"\n\n{memory}" if memory else "")
     )
 
     specialist_name = SPECIALIST_META[req.physician_id]["name"]
@@ -1117,11 +1165,15 @@ async def consensus(
         f"• {r.get('title','')} ({r.get('year','')}): {r.get('summary','')}"
         for r in req.research
     )
+    memory = _retrieve_patient_context(_cases_user_id(user), req.symptoms)
+    attachments_block = _attachment_block_for_case(req.case_id) if req.case_id else ""
     prompt = (
         f"Patient symptoms: {req.symptoms}\n\n"
         f"Follow-up responses: {req.followup_answers}\n\n"
         f"Specialist assessments:\n{assessments_text}\n\n"
         f"Supporting research:\n{research_text}"
+        + (f"\n\n{attachments_block}" if attachments_block else "")
+        + (f"\n\n{memory}" if memory else "")
     )
     with traced_workflow(
         "Consensus: Integrating Multidisciplinary Assessment",
@@ -1165,11 +1217,15 @@ async def plan(
     assessments_text = "\n\n".join(
         f"{a['name']} ({a['specialty']}):\n{a['assessment']}" for a in req.assessments
     )
+    memory = _retrieve_patient_context(_cases_user_id(user), req.symptoms)
+    attachments_block = _attachment_block_for_case(req.case_id) if req.case_id else ""
     prompt = (
         f"Diagnosis: {json.dumps(req.consensus)}\n\n"
         f"Patient symptoms: {req.symptoms}\n\n"
         f"Follow-up responses: {req.followup_answers}\n\n"
         f"Specialist findings:\n{assessments_text}"
+        + (f"\n\n{attachments_block}" if attachments_block else "")
+        + (f"\n\n{memory}" if memory else "")
     )
     with traced_workflow(
         "Treatment Plan: Multi-Specialty Coordination",
@@ -1247,6 +1303,475 @@ async def patient_message_followup(
     ):
         reply = await run_agent(followup_qa_agent, prompt, model=model_slug)
     return {"reply": reply}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Patient memory (Phase 3) — consultations table + vector retrieval
+# ─────────────────────────────────────────────────────────────────────────────
+
+FREE_CONSULTATION_CAP = 4
+
+
+def _consultation_count(con: sqlite3.Connection, user_id: str) -> int:
+    row = con.execute(
+        "SELECT COUNT(*) FROM consultations WHERE user_id = ?", (user_id,)
+    ).fetchone()
+    return int(row[0]) if row else 0
+
+
+def _assert_consultation_cap(con: sqlite3.Connection, user_id: str, user_plan: str) -> None:
+    if user_plan == "pro":
+        return
+    count = _consultation_count(con, user_id)
+    if count >= FREE_CONSULTATION_CAP:
+        raise HTTPException(
+            status_code=402,
+            detail={
+                "code": "consultation_cap",
+                "cap": FREE_CONSULTATION_CAP,
+                "current": count,
+                "message": (
+                    f"Free tier is limited to {FREE_CONSULTATION_CAP} saved consultations. "
+                    "Delete one or upgrade to Pro."
+                ),
+            },
+        )
+
+
+class ConsultationSaveIn(BaseModel):
+    case_id: str
+    summary: Annotated[str, Field(min_length=1, max_length=8000)]
+    primary_dx: str | None = None
+    icd_code: str | None = None
+    urgency: str | None = None
+    confidence: int | None = None
+    attachment_texts: list[str] = Field(default_factory=list)
+
+
+@app.post("/api/patient/consultations")
+async def save_consultation(
+    req: ConsultationSaveIn,
+    response: Response,
+    user: Optional[AuthUser] = Depends(current_user_maybe_required),
+):
+    """Persist a finished consultation and index it for vector retrieval.
+
+    Called automatically by the frontend after the consensus completes. Both
+    tiers store; Free is capped at FREE_CONSULTATION_CAP.
+    """
+    from auth import effective_plan
+    from embeddings import get_embedding_provider
+    from vector_store import get_vector_store
+
+    user_id = _cases_user_id(user)
+    plan = effective_plan(user)
+
+    con = _get_db()
+    try:
+        _assert_consultation_cap(con, user_id, plan)
+
+        consultation_id = f"con_{uuid.uuid4().hex[:24]}"
+        now = datetime.now(timezone.utc).isoformat()
+
+        con.execute(
+            """
+            INSERT INTO consultations
+              (id, user_id, case_id, summary, primary_dx, icd_code, urgency, confidence, created_at)
+            VALUES (?,?,?,?,?,?,?,?,?)
+            """,
+            (
+                consultation_id,
+                user_id,
+                req.case_id,
+                req.summary,
+                req.primary_dx,
+                req.icd_code,
+                req.urgency,
+                req.confidence,
+                now,
+            ),
+        )
+        con.commit()
+
+        # Build embedding input from summary + diagnosis + attachment text.
+        embed_text = "\n\n".join(
+            chunk for chunk in [
+                req.summary,
+                f"Primary diagnosis: {req.primary_dx}" if req.primary_dx else "",
+                "\n".join(t for t in req.attachment_texts if t),
+            ]
+            if chunk
+        )
+
+        try:
+            vec = get_embedding_provider().embed(embed_text)
+            get_vector_store().upsert(
+                con,
+                id=consultation_id,
+                embedding=vec,
+                metadata={
+                    "user_id": user_id,
+                    "case_id": req.case_id,
+                    "created_at": now,
+                    "primary_dx": req.primary_dx or "",
+                    "urgency": req.urgency or "",
+                    "confidence": req.confidence or 0,
+                },
+                document=req.summary[:4000],
+            )
+        except Exception as exc:
+            log.warning("embedding/vector upsert failed; consultation saved without retrieval: %s", exc)
+
+        remaining = None if plan == "pro" else max(0, FREE_CONSULTATION_CAP - _consultation_count(con, user_id))
+        if remaining is not None:
+            response.headers["X-Consultation-Remaining"] = str(remaining)
+
+        return {
+            "id": consultation_id,
+            "case_id": req.case_id,
+            "created_at": now,
+            "remaining": remaining,
+        }
+    finally:
+        con.close()
+
+
+@app.get("/api/patient/consultations")
+async def list_consultations(
+    response: Response,
+    user: Optional[AuthUser] = Depends(current_user_maybe_required),
+):
+    from auth import effective_plan
+
+    user_id = _cases_user_id(user)
+    plan = effective_plan(user)
+
+    con = _get_db()
+    try:
+        rows = con.execute(
+            """
+            SELECT id, case_id, summary, primary_dx, icd_code, urgency, confidence, created_at
+            FROM consultations
+            WHERE user_id = ?
+            ORDER BY created_at DESC
+            """,
+            (user_id,),
+        ).fetchall()
+
+        if plan != "pro":
+            response.headers["X-Consultation-Remaining"] = str(
+                max(0, FREE_CONSULTATION_CAP - len(rows))
+            )
+
+        return {
+            "plan": plan,
+            "cap": None if plan == "pro" else FREE_CONSULTATION_CAP,
+            "consultations": [
+                {
+                    "id": r["id"],
+                    "case_id": r["case_id"],
+                    "summary": r["summary"],
+                    "primary_dx": r["primary_dx"],
+                    "icd_code": r["icd_code"],
+                    "urgency": r["urgency"],
+                    "confidence": r["confidence"],
+                    "created_at": r["created_at"],
+                }
+                for r in rows
+            ],
+        }
+    finally:
+        con.close()
+
+
+class RetrieveIn(BaseModel):
+    query: Annotated[str, Field(min_length=1, max_length=8000)]
+    top_k: int = 3
+
+
+@app.post("/api/patient/retrieve")
+async def retrieve_consultations(
+    req: RetrieveIn,
+    user: Optional[AuthUser] = Depends(current_user_maybe_required),
+):
+    from embeddings import get_embedding_provider
+    from vector_store import get_vector_store
+
+    user_id = _cases_user_id(user)
+    if not user_id:
+        return {"hits": []}
+
+    con = _get_db()
+    try:
+        try:
+            vec = get_embedding_provider().embed(req.query)
+            hits = get_vector_store().query(
+                con,
+                embedding=vec,
+                top_k=max(1, min(10, int(req.top_k))),
+                where={"user_id": user_id},
+            )
+        except Exception as exc:
+            log.warning("retrieval failed: %s", exc)
+            return {"hits": []}
+
+        return {
+            "hits": [
+                {
+                    "id": h.id,
+                    "score": round(h.score, 4),
+                    "metadata": h.metadata,
+                    "document": h.document,
+                }
+                for h in hits
+            ]
+        }
+    finally:
+        con.close()
+
+
+@app.delete("/api/patient/consultations/{consultation_id}")
+async def delete_consultation(
+    consultation_id: str,
+    user: Optional[AuthUser] = Depends(current_user_maybe_required),
+):
+    from vector_store import get_vector_store
+
+    user_id = _cases_user_id(user)
+    con = _get_db()
+    try:
+        row = con.execute(
+            "SELECT user_id FROM consultations WHERE id = ?", (consultation_id,)
+        ).fetchone()
+        if row is None or (row["user_id"] or "") != user_id:
+            raise HTTPException(status_code=404, detail="Consultation not found.")
+        con.execute("DELETE FROM consultations WHERE id = ?", (consultation_id,))
+        con.commit()
+        try:
+            get_vector_store().delete(con, consultation_id)
+        except Exception as exc:
+            log.warning("vector delete failed (ignoring): %s", exc)
+        return {"ok": True}
+    finally:
+        con.close()
+
+
+def _retrieve_patient_context(user_id: str, query: str, top_k: int = 3) -> str:
+    """Return a plain-text block of similar prior consultations for injection into agent prompts.
+
+    Returns "" when the user has no prior consultations or embedding fails —
+    callers can unconditionally concatenate the result.
+    """
+    if not user_id or not (query or "").strip():
+        return ""
+    from embeddings import get_embedding_provider
+    from vector_store import get_vector_store
+
+    con = _get_db()
+    try:
+        try:
+            vec = get_embedding_provider().embed(query)
+            hits = get_vector_store().query(
+                con,
+                embedding=vec,
+                top_k=top_k,
+                where={"user_id": user_id},
+            )
+        except Exception as exc:
+            log.warning("patient context retrieval failed: %s", exc)
+            return ""
+
+        if not hits:
+            return ""
+
+        lines = ["--- Patient's prior consultations (most relevant first) ---"]
+        for h in hits:
+            meta = h.metadata or {}
+            date = str(meta.get("created_at") or "")[:10]
+            dx = meta.get("primary_dx") or "—"
+            urgency = meta.get("urgency") or ""
+            conf = meta.get("confidence") or 0
+            score_pct = int(round(h.score * 100))
+            summary = (h.document or "")[:600].replace("\n", " ")
+            lines.append(
+                f"[{date} · {dx} (confidence {conf}%, {urgency}) · match {score_pct}%]\n{summary}"
+            )
+        lines.append("---")
+        return "\n\n".join(lines)
+    finally:
+        con.close()
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Test attachments (Phase 3.5) — PDF / text upload attached to follow-up
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+def _attachment_block_for_case(case_id: str, question_texts: list[str] | None = None) -> str:
+    """Read attachments for a case and render as a prompt-safe text block."""
+    from attachments import format_attachment_block, get_attachment_store
+
+    con = _get_db()
+    try:
+        rows = get_attachment_store().list_for_case(con, case_id)
+    except NotImplementedError:
+        return ""
+    finally:
+        con.close()
+    return format_attachment_block(rows, question_texts)
+
+
+@app.post("/api/cases/{case_id}/attachments")
+async def create_attachment(
+    case_id: str,
+    response: Response,
+    kind: str = Form("file"),
+    question_index: int | None = Form(default=None),
+    text: str = Form(""),
+    file: UploadFile | None = File(default=None),
+    user: Optional[AuthUser] = Depends(current_user_maybe_required),
+):
+    """Attach a test-result file or pasted text to a follow-up question on a case.
+
+    Body is multipart/form-data. Either `file` OR `text` must be non-empty.
+    """
+    from attachments import (
+        AttachmentStoreError,
+        extract_text,
+        get_attachment_store,
+        is_mime_supported,
+    )
+    from auth import effective_plan
+
+    if kind not in ("file", "pasted"):
+        raise HTTPException(status_code=400, detail="kind must be 'file' or 'pasted'.")
+
+    user_id = _cases_user_id(user)
+    plan = effective_plan(user)
+
+    # Verify the case belongs to this user.
+    con = _get_db()
+    try:
+        row = con.execute(
+            "SELECT user_id FROM cases WHERE id = ?", (case_id,)
+        ).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Case not found.")
+        if (row["user_id"] or "") != user_id:
+            raise HTTPException(status_code=403, detail="This case does not belong to you.")
+
+        filename: str | None = None
+        mime: str | None = None
+        blob: bytes | None = None
+        payload_text = text or ""
+
+        if kind == "file":
+            if file is None:
+                raise HTTPException(status_code=400, detail="kind='file' requires a `file` field.")
+            blob = await file.read()
+            filename = file.filename or "attachment"
+            mime = file.content_type or "application/octet-stream"
+            if not is_mime_supported(mime):
+                raise HTTPException(
+                    status_code=415,
+                    detail={
+                        "code": "attachment_type",
+                        "message": f"Unsupported file type: {mime}",
+                    },
+                )
+            payload_text = extract_text(blob, mime, filename)
+        else:
+            payload_text = payload_text.strip()
+            if not payload_text:
+                raise HTTPException(status_code=400, detail="kind='pasted' requires non-empty `text`.")
+
+        try:
+            store = get_attachment_store()
+            row_out = store.save(
+                con,
+                case_id=case_id,
+                user_id=user_id,
+                user_plan=plan,
+                kind=kind,  # type: ignore[arg-type]
+                filename=filename,
+                mime_type=mime,
+                blob=blob,
+                text=payload_text,
+                question_index=question_index,
+            )
+        except AttachmentStoreError as exc:
+            raise HTTPException(
+                status_code=402,
+                detail={"code": exc.code, "message": exc.message, **exc.ctx},
+            ) from exc
+
+        return {
+            "id": row_out.id,
+            "filename": row_out.filename,
+            "mime_type": row_out.mime_type,
+            "kind": row_out.kind,
+            "size_bytes": row_out.size_bytes,
+            "text_preview": (row_out.text or "")[:400],
+            "question_index": row_out.question_index,
+            "created_at": row_out.created_at,
+        }
+    finally:
+        con.close()
+
+
+@app.get("/api/cases/{case_id}/attachments")
+async def list_attachments(
+    case_id: str,
+    user: Optional[AuthUser] = Depends(current_user_maybe_required),
+):
+    from attachments import get_attachment_store
+
+    user_id = _cases_user_id(user)
+    con = _get_db()
+    try:
+        row = con.execute("SELECT user_id FROM cases WHERE id = ?", (case_id,)).fetchone()
+        if row is None:
+            raise HTTPException(status_code=404, detail="Case not found.")
+        if (row["user_id"] or "") != user_id:
+            raise HTTPException(status_code=403, detail="This case does not belong to you.")
+
+        rows = get_attachment_store().list_for_case(con, case_id)
+        return {
+            "attachments": [
+                {
+                    "id": r.id,
+                    "kind": r.kind,
+                    "filename": r.filename,
+                    "mime_type": r.mime_type,
+                    "size_bytes": r.size_bytes,
+                    "text_preview": (r.text or "")[:400],
+                    "question_index": r.question_index,
+                    "created_at": r.created_at,
+                }
+                for r in rows
+            ]
+        }
+    finally:
+        con.close()
+
+
+@app.delete("/api/cases/{case_id}/attachments/{attachment_id}")
+async def delete_attachment(
+    case_id: str,
+    attachment_id: str,
+    user: Optional[AuthUser] = Depends(current_user_maybe_required),
+):
+    from attachments import get_attachment_store
+
+    user_id = _cases_user_id(user)
+    con = _get_db()
+    try:
+        ok = get_attachment_store().delete(con, attachment_id, user_id)
+        if not ok:
+            raise HTTPException(status_code=404, detail="Attachment not found.")
+        return {"ok": True}
+    finally:
+        con.close()
 
 
 # ─────────────────────────────────────────────────────────────────────────────

@@ -9,6 +9,8 @@ import { ConsensusView } from './ConsensusView';
 import { ModelSelector, useStoredModelKey } from './ModelSelector';
 import { VoiceInput } from './VoiceInput';
 import { VoiceOutput } from './VoiceOutput';
+import { PatientContext } from './PatientContext';
+import { TestAttachment } from './TestAttachment';
 
 type Physician = {
   id: string;
@@ -90,6 +92,9 @@ export function CaseWorkspace() {
   const [step, setStep] = useState(0);
   const [maxStep, setMaxStep] = useState(0);
   const [modelKey, setModelKey] = useStoredModelKey('nvidia-nemotron-free');
+  const [caseId, setCaseId] = useState<string | null>(null);
+  const [consultationSaveError, setConsultationSaveError] = useState<string | null>(null);
+  const consultationSavedRef = useRef<string | null>(null);
 
   const advanceTo = useCallback((n: number) => {
     setStep(n);
@@ -184,6 +189,7 @@ export function CaseWorkspace() {
     void (async () => {
       const id = localStorage.getItem(LS_CASE);
       if (!id) return;
+      setCaseId(id);
       const tok = await tokenFn();
       try {
         const row = await councilJson<{
@@ -232,7 +238,10 @@ export function CaseWorkspace() {
   const ensureCase = useCallback(async () => {
     if (typeof window === 'undefined') return '';
     let id = localStorage.getItem(LS_CASE);
-    if (id) return id;
+    if (id) {
+      if (caseId !== id) setCaseId(id);
+      return id;
+    }
     const tok = await tokenFn();
     const created = await councilJson<{ id: string }>(`/api/cases`, {
       method: 'POST',
@@ -241,6 +250,7 @@ export function CaseWorkspace() {
     });
     id = created.id;
     localStorage.setItem(LS_CASE, id);
+    setCaseId(id);
     return id;
   }, [tokenFn, symptoms]);
 
@@ -254,7 +264,7 @@ export function CaseWorkspace() {
         {
           method: 'POST',
           token: tok,
-          body: JSON.stringify({ symptoms, model: modelKey }),
+          body: JSON.stringify({ symptoms, model: modelKey, case_id: caseId }),
         },
       );
       const lines = parseNumberedQuestions(data.questions);
@@ -291,7 +301,7 @@ export function CaseWorkspace() {
       }>(`/api/deliberation/select-experts`, {
         method: 'POST',
         token: tok,
-        body: JSON.stringify({ symptoms, followup_answers: fqJoined, model: modelKey }),
+        body: JSON.stringify({ symptoms, followup_answers: fqJoined, model: modelKey, case_id: caseId }),
       });
       setCouncilRoster(data.experts ?? []);
       setDeliberationCaseSummary(data.case_summary ?? '');
@@ -342,6 +352,7 @@ export function CaseWorkspace() {
             prior_assessments: prior,
             council_context: ctx,
             model: modelKey,
+            case_id: caseId,
           }),
         });
         out.push({
@@ -378,6 +389,7 @@ export function CaseWorkspace() {
             assessment: p.assessment ?? '',
           })),
           model: modelKey,
+            case_id: caseId,
         }),
       });
       setResearch(data.papers ?? []);
@@ -410,6 +422,7 @@ export function CaseWorkspace() {
             })),
             research,
             model: modelKey,
+            case_id: caseId,
           }),
         },
       );
@@ -441,6 +454,7 @@ export function CaseWorkspace() {
             assessment: p.assessment ?? '',
           })),
           model: modelKey,
+            case_id: caseId,
         }),
       });
       setPlan(data.plan ?? '');
@@ -461,7 +475,7 @@ export function CaseWorkspace() {
       const data = await councilJson<{ message: string }>(`/api/message`, {
         method: 'POST',
         token: tok,
-        body: JSON.stringify({ symptoms, consensus, plan, model: modelKey }),
+        body: JSON.stringify({ symptoms, consensus, plan, model: modelKey, case_id: caseId }),
       });
       setMessage(data.message ?? '');
       advanceTo(7);
@@ -471,6 +485,74 @@ export function CaseWorkspace() {
       setBusy(null);
     }
   };
+
+  const saveConsultation = useCallback(async () => {
+    if (!caseId || !consensus) return;
+    if (consultationSavedRef.current === caseId) return;
+    consultationSavedRef.current = caseId;  // optimistic lock
+    try {
+      const tok = await tokenFn();
+      const primary_dx =
+        (consensus.primaryDiagnosis as string | undefined) ??
+        (consensus.primary_diagnosis as string | undefined) ??
+        null;
+      const summary =
+        typeof consensus.keyFindings === 'string'
+          ? (consensus.keyFindings as string)
+          : typeof consensus.key_findings === 'string'
+            ? (consensus.key_findings as string)
+            : message || plan || symptoms;
+
+      // Fetch attachment texts for embedding input.
+      let attachmentTexts: string[] = [];
+      try {
+        const attached = await councilJson<{
+          attachments: { text_preview: string }[];
+        }>(`/api/cases/${caseId}/attachments`, {
+          method: 'GET',
+          token: tok,
+        });
+        attachmentTexts = (attached.attachments ?? [])
+          .map((a) => a.text_preview)
+          .filter(Boolean);
+      } catch {
+        /* ignore — attachments are optional */
+      }
+
+      await councilJson('/api/patient/consultations', {
+        method: 'POST',
+        token: tok,
+        body: JSON.stringify({
+          case_id: caseId,
+          summary,
+          primary_dx,
+          icd_code:
+            (consensus.icdCode as string | undefined) ??
+            (consensus.icd_code as string | undefined) ??
+            null,
+          urgency:
+            (consensus.urgency as string | undefined) ??
+            (consensus.urgencyLevel as string | undefined) ??
+            null,
+          confidence:
+            typeof consensus.confidence === 'number'
+              ? consensus.confidence
+              : null,
+          attachment_texts: attachmentTexts,
+        }),
+      });
+      setConsultationSaveError(null);
+    } catch (e) {
+      consultationSavedRef.current = null;  // allow retry
+      setConsultationSaveError(e instanceof Error ? e.message : 'Save failed');
+    }
+  }, [caseId, consensus, message, plan, symptoms, tokenFn]);
+
+  useEffect(() => {
+    if (step === 7 && consensus && caseId && !consultationSaveError) {
+      void saveConsultation();
+    }
+  }, [step, consensus, caseId, consultationSaveError, saveConsultation]);
 
   useEffect(() => {
     if (busy || err) return;
@@ -523,6 +605,7 @@ export function CaseWorkspace() {
             plan,
             patient_message: message,
             model: modelKey,
+            case_id: caseId,
           }),
         },
       );
@@ -536,6 +619,9 @@ export function CaseWorkspace() {
 
   const reset = () => {
     localStorage.removeItem(LS_CASE);
+    setCaseId(null);
+    consultationSavedRef.current = null;
+    setConsultationSaveError(null);
     setStep(0);
     setMaxStep(0);
     setSymptoms('');
@@ -681,6 +767,7 @@ export function CaseWorkspace() {
       <StageFrame numeral={currentStage.numeral} label={currentStage.label}>
         {step === 0 && (
           <section className='space-y-5'>
+            <PatientContext query={symptoms} />
             <div className='flex items-center justify-between gap-4'>
               <label className='block font-display text-[1.375rem] text-ink'>
                 Describe the symptoms.
@@ -768,6 +855,10 @@ export function CaseWorkspace() {
                       }
                     />
                   </div>
+                  <TestAttachment
+                    caseId={caseId}
+                    questionIndex={i}
+                  />
                 </li>
               ))}
             </ol>
