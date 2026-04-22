@@ -60,31 +60,103 @@ class AuthUser:
 FREE_CONSULTATION_CAP = 4
 
 
+def _looks_pro(value: Any) -> bool:
+    """Best-effort truthy check against Clerk plan/feature claim shapes."""
+    if value is None:
+        return False
+    if isinstance(value, bool):
+        return value
+    if isinstance(value, str):
+        v = value.lower()
+        return "pro" in v or v in {"active", "paid", "premium"}
+    if isinstance(value, list):
+        return any(_looks_pro(item) for item in value)
+    if isinstance(value, dict):
+        # Check any slug-like keys.
+        for k, v in value.items():
+            if isinstance(k, str) and "pro" in k.lower() and bool(v):
+                return True
+            if _looks_pro(v):
+                return True
+    return False
+
+
+# Clerk Billing-related claim keys we'll check in priority order.
+_PLAN_CLAIM_KEYS = ("pla", "plans", "plan", "fea", "features")
+_META_KEYS = ("metadata", "public_metadata", "unsafe_metadata", "private_metadata")
+
+
 def _plan_from_claims(claims: dict[str, Any]) -> PlanLiteral:
     """Extract the user's current plan from a Clerk JWT.
 
-    Clerk Billing publishes entitlements in the `pla` (plan) or `plans` claims
-    depending on template configuration. We accept either shape and fall back
-    to the Clerk public metadata `plan` key if configured manually.
+    Clerk Billing publishes entitlements under various claim names depending
+    on how the JWT template is configured. We accept any of `pla`, `plans`,
+    `plan`, `fea`, `features` — and also dig into `public_metadata.plan`.
     """
-    # Clerk Billing canonical claim (array of enabled plan slugs).
-    plans = claims.get("pla") or claims.get("plans")
-    if isinstance(plans, list):
-        for slug in plans:
-            if isinstance(slug, str) and "pro" in slug.lower():
-                return "pro"
-    elif isinstance(plans, str):
-        if "pro" in plans.lower():
+    for key in _PLAN_CLAIM_KEYS:
+        if key in claims and _looks_pro(claims[key]):
             return "pro"
-
-    # Manual fallback via user public metadata (if developer set metadata.plan = "pro").
-    metadata = claims.get("metadata") or claims.get("public_metadata") or {}
-    if isinstance(metadata, dict):
-        val = metadata.get("plan")
-        if isinstance(val, str) and val.lower() == "pro":
+    for mkey in _META_KEYS:
+        md = claims.get(mkey)
+        if isinstance(md, dict) and _looks_pro(md.get("plan")):
             return "pro"
-
     return "free"
+
+
+# --- Optional: Clerk Backend API fallback -----------------------------------
+# If the JWT template doesn't surface plan claims, we can look the user up via
+# Clerk's admin API using CLERK_SECRET_KEY. Cached per-user for 60s to avoid
+# per-request fan-out.
+
+import time
+import urllib.request as _urllib_req
+import urllib.error as _urllib_err
+import json as _json
+
+_CLERK_API_BASE = os.environ.get("CLERK_API_URL", "https://api.clerk.com/v1")
+_plan_cache: dict[str, tuple[float, PlanLiteral]] = {}
+_PLAN_CACHE_TTL = 60.0
+
+
+def _plan_from_clerk_api(user_id: str) -> PlanLiteral:
+    """Look up the user's public metadata via the Clerk Backend API.
+
+    Returns 'pro' when public_metadata.plan looks Pro, else 'free'. Silent
+    on any transport/permission error so this never blocks a request.
+    """
+    secret = os.environ.get("CLERK_SECRET_KEY", "").strip()
+    if not secret or not user_id:
+        return "free"
+
+    now = time.time()
+    hit = _plan_cache.get(user_id)
+    if hit and now - hit[0] < _PLAN_CACHE_TTL:
+        return hit[1]
+
+    url = f"{_CLERK_API_BASE}/users/{user_id}"
+    req = _urllib_req.Request(
+        url,
+        method="GET",
+        headers={
+            "Authorization": f"Bearer {secret}",
+            "Accept": "application/json",
+        },
+    )
+    plan: PlanLiteral = "free"
+    try:
+        with _urllib_req.urlopen(req, timeout=4) as resp:
+            body = resp.read().decode("utf-8", errors="replace")
+        data = _json.loads(body)
+        pm = data.get("public_metadata") or {}
+        if _looks_pro(pm.get("plan")):
+            plan = "pro"
+    except (_urllib_err.URLError, _urllib_err.HTTPError, ValueError, TimeoutError):
+        plan = "free"
+    except Exception:
+        plan = "free"
+
+    _plan_cache[user_id] = (now, plan)
+    return plan
 
 
 @lru_cache(maxsize=1)
@@ -195,12 +267,23 @@ _DEV_FORCE_PRO = os.environ.get("DEV_FORCE_PRO") == "1"
 
 
 def effective_plan(user: Optional[AuthUser]) -> PlanLiteral:
-    """Resolve the effective plan for a user, respecting the dev override."""
+    """Resolve the effective plan for a user.
+
+    Priority:
+      1. DEV_FORCE_PRO=1 env override (local dev)
+      2. Plan already embedded in the JWT (AuthUser.plan)
+      3. Clerk admin API lookup (only if CLERK_SECRET_KEY is configured)
+    """
     if _DEV_FORCE_PRO:
         return "pro"
     if user is None:
         return "free"
-    return user.plan
+    if user.plan == "pro":
+        return "pro"
+    # JWT didn't surface a plan claim. Try the Clerk admin API as a fallback —
+    # this covers the common case where Billing is enabled but the user's
+    # JWT template doesn't include plan claims yet.
+    return _plan_from_clerk_api(user.user_id)
 
 
 async def require_pro(

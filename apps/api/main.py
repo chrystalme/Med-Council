@@ -808,6 +808,28 @@ _FEEDBACK_PAGE = """<!doctype html>
 #  Model selector catalog
 # ─────────────────────────────────────────────────────────────────────────────
 
+@app.get("/api/me")
+async def me(
+    user: Optional[AuthUser] = Depends(current_user_maybe_required),
+):
+    """Return the resolved plan + basic profile for the current session.
+
+    The frontend uses this as the authoritative tier check. Reading the
+    plan from a single source (the same `effective_plan()` helper the
+    server's paywall uses) avoids the common pitfall of the client-side
+    `has({plan})` helper returning false when the JWT template isn't
+    configured to surface plan claims.
+    """
+    from auth import effective_plan
+
+    plan = effective_plan(user)
+    return {
+        "user_id": user.user_id if user else None,
+        "email": user.email if user else None,
+        "plan": plan,
+    }
+
+
 @app.get("/api/models")
 async def list_models(
     user: Optional[AuthUser] = Depends(current_user_maybe_required),

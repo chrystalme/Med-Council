@@ -1,5 +1,5 @@
 import Link from "next/link";
-import { Show, SignInButton, SignUpButton } from "@clerk/nextjs";
+import { PricingTable, Show, SignInButton, SignUpButton } from "@clerk/nextjs";
 
 const SPECIALISTS = [
   "Internal medicine",
@@ -50,6 +50,9 @@ export default function LandingPage() {
           </span>
         </div>
         <div className="mono-label flex items-center gap-3">
+          <Link href="#pricing" className="hover:text-indigo transition-colors hidden sm:inline">
+            Pricing
+          </Link>
           <span className="hidden md:inline">Plate 00 <span className="diamond" /> Cover</span>
           <span className="inline-flex items-center gap-1.5">
             <span className="h-1.5 w-1.5 rounded-full bg-cornflower atlas-pulse" />
@@ -175,6 +178,61 @@ export default function LandingPage() {
               </li>
             ))}
           </ol>
+        </div>
+      </section>
+
+      {/* Pricing — Clerk Billing */}
+      <section id="pricing" className="border-t border-line relative scroll-mt-20">
+        <div className="px-6 md:px-14 py-16 md:py-20 max-w-5xl mx-auto">
+          <div className="flex items-center gap-4 mb-8">
+            <span className="stage-marker">Pricing</span>
+            <span className="h-px flex-1 bg-line-strong" />
+            <span className="plate-counter">two tiers</span>
+          </div>
+          <div className="grid grid-cols-12 gap-6 mb-10">
+            <div className="col-span-12 lg:col-span-7">
+              <h2 className="font-display text-[clamp(2rem,4vw,3rem)] leading-[1.04] text-ink mb-4 text-balance">
+                <em className="italic text-indigo font-normal">Two</em> tiers. No
+                seat minimums.
+              </h2>
+              <p className="text-[1.0625rem] text-ink-slate max-w-[48ch] leading-relaxed text-pretty">
+                Free gives you the full 7-stage pipeline on Nemotron, browser
+                voice, and memory for up to four consultations. Pro unlocks
+                premium models, Whisper transcription, unlimited saved
+                consultations, 10 MB × 20 test attachments, and email
+                delivery.
+              </p>
+            </div>
+            <aside className="col-span-12 lg:col-span-5 lg:border-l lg:border-line lg:pl-6">
+              <p className="stage-marker mb-3">What Pro adds</p>
+              <ul className="space-y-2 text-[14.5px] text-ink-slate">
+                <li className="flex items-baseline gap-3">
+                  <span className="plate-counter text-ink-faint w-7 tabular-nums">I</span>
+                  Claude Opus 4.7, GPT-5, Gemini 2.5 Pro, DeepSeek R1
+                </li>
+                <li className="flex items-baseline gap-3">
+                  <span className="plate-counter text-ink-faint w-7 tabular-nums">II</span>
+                  Whisper transcription + premium TTS voices
+                </li>
+                <li className="flex items-baseline gap-3">
+                  <span className="plate-counter text-ink-faint w-7 tabular-nums">III</span>
+                  Unlimited saved consultations (vector memory)
+                </li>
+                <li className="flex items-baseline gap-3">
+                  <span className="plate-counter text-ink-faint w-7 tabular-nums">IV</span>
+                  10 MB × 20 test attachments per case
+                </li>
+                <li className="flex items-baseline gap-3">
+                  <span className="plate-counter text-ink-faint w-7 tabular-nums">V</span>
+                  Email the summary directly to the patient
+                </li>
+              </ul>
+            </aside>
+          </div>
+
+          <div className="plate-card p-6 md:p-8">
+            <PricingTable />
+          </div>
         </div>
       </section>
 
