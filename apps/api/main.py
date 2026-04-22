@@ -17,11 +17,14 @@ from __future__ import annotations
 
 import asyncio
 import json
+import logging
 import os
 import re
 import secrets
 import sqlite3
 import uuid
+
+log = logging.getLogger("medai.api")
 from datetime import datetime, timezone
 from pathlib import Path
 from contextlib import asynccontextmanager, contextmanager
@@ -35,7 +38,7 @@ from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, field_validator
 
-from auth import AuthUser, auth_configured, current_user_maybe_required
+from auth import AuthUser, auth_configured, current_user_maybe_required, require_pro
 from escalation import maybe_escalate_oncall
 from rate_limit import enforce_rate_limit, rate_limit_enabled
 
@@ -1244,3 +1247,72 @@ async def patient_message_followup(
     ):
         reply = await run_agent(followup_qa_agent, prompt, model=model_slug)
     return {"reply": reply}
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+#  Voice I/O (Phase 2) — Whisper transcription + OpenAI TTS (Pro-only)
+# ─────────────────────────────────────────────────────────────────────────────
+
+_SPEECH_VOICES = {"alloy", "echo", "fable", "onyx", "nova", "shimmer"}
+
+
+@app.post("/api/speech/transcribe")
+async def speech_transcribe(
+    audio: UploadFile = File(...),
+    user: AuthUser = Depends(require_pro),  # noqa: B008 — FastAPI dep pattern
+):
+    """Transcribe an uploaded audio blob via the configured SpeechProvider.
+
+    Free tier is expected to use the browser's Web Speech API client-side;
+    this endpoint gates access to the higher-quality Whisper flow and is
+    behind `require_pro`.
+    """
+    from speech import get_speech_provider
+
+    try:
+        data = await audio.read()
+        if not data:
+            raise HTTPException(status_code=400, detail="Empty audio upload")
+        mime = audio.content_type or "audio/webm"
+        filename = audio.filename or "audio.webm"
+        provider = get_speech_provider()
+        text = provider.transcribe(data, mime, filename=filename)
+        return {"text": text}
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.exception("transcription failed")
+        raise HTTPException(status_code=502, detail={"code": "transcribe_failed", "message": str(exc)[:200]}) from exc
+
+
+class TTSIn(BaseModel):
+    text: Annotated[str, Field(min_length=1, max_length=4000)]
+    voice: str = "alloy"
+
+
+@app.post("/api/speech/synthesize")
+async def speech_synthesize(
+    req: TTSIn,
+    user: AuthUser = Depends(require_pro),
+):
+    """Synthesise an mp3 from `text` via the configured SpeechProvider.
+
+    Free tier uses `window.speechSynthesis` on the client; this endpoint is
+    Pro-only for higher-quality voices.
+    """
+    from speech import get_speech_provider
+
+    voice = req.voice if req.voice in _SPEECH_VOICES else "alloy"
+    try:
+        provider = get_speech_provider()
+        audio_bytes = provider.synthesize(req.text, voice=voice)
+        return Response(
+            content=audio_bytes,
+            media_type="audio/mpeg",
+            headers={"Cache-Control": "no-store"},
+        )
+    except HTTPException:
+        raise
+    except Exception as exc:
+        log.exception("synthesis failed")
+        raise HTTPException(status_code=502, detail={"code": "synthesize_failed", "message": str(exc)[:200]}) from exc

@@ -7,6 +7,8 @@ import { PaywallBanner } from './PaywallBanner';
 import { Markdown } from './Markdown';
 import { ConsensusView } from './ConsensusView';
 import { ModelSelector, useStoredModelKey } from './ModelSelector';
+import { VoiceInput } from './VoiceInput';
+import { VoiceOutput } from './VoiceOutput';
 
 type Physician = {
   id: string;
@@ -679,12 +681,22 @@ export function CaseWorkspace() {
       <StageFrame numeral={currentStage.numeral} label={currentStage.label}>
         {step === 0 && (
           <section className='space-y-5'>
-            <label className='block font-display text-[1.375rem] text-ink'>
-              Describe the symptoms.
-            </label>
+            <div className='flex items-center justify-between gap-4'>
+              <label className='block font-display text-[1.375rem] text-ink'>
+                Describe the symptoms.
+              </label>
+              <VoiceInput
+                label='Dictate symptoms'
+                disabled={!!busy}
+                onTranscript={(t) =>
+                  setSymptoms((s) => (s ? `${s.trimEnd()} ${t}` : t))
+                }
+              />
+            </div>
             <p className='text-[15px] text-ink-slate leading-relaxed max-w-[56ch]'>
               Onset, severity, location, associated symptoms, medications,
-              history. The council reasons from whatever you give it.
+              history. The council reasons from whatever you give it. Tap the
+              mic to dictate.
             </p>
             <textarea
               className='field min-h-[180px]'
@@ -724,9 +736,12 @@ export function CaseWorkspace() {
                   <span className='mono-label absolute -left-0.5 top-0 -translate-x-full pr-3 text-ink-muted'>
                     Q{String(i + 1).padStart(2, '0')}
                   </span>
-                  <p className='font-display text-[1.05rem] text-ink leading-snug'>
-                    {q}
-                  </p>
+                  <div className='flex items-start justify-between gap-3'>
+                    <p className='font-display text-[1.05rem] text-ink leading-snug flex-1'>
+                      {q}
+                    </p>
+                    <VoiceOutput text={q} label={`Read question ${i + 1}`} />
+                  </div>
                   <textarea
                     className='field min-h-[88px]'
                     placeholder='Your answer…'
@@ -739,6 +754,20 @@ export function CaseWorkspace() {
                       });
                     }}
                   />
+                  <div className='flex justify-end'>
+                    <VoiceInput
+                      label={`Dictate answer to Q${i + 1}`}
+                      disabled={!!busy}
+                      onTranscript={(t) =>
+                        setFqAnswers((prev) => {
+                          const n = [...prev];
+                          const existing = n[i] ?? '';
+                          n[i] = existing ? `${existing.trimEnd()} ${t}` : t;
+                          return n;
+                        })
+                      }
+                    />
+                  </div>
                 </li>
               ))}
             </ol>
@@ -959,14 +988,17 @@ export function CaseWorkspace() {
 
         {step === 7 && (
           <section className='space-y-8'>
-            <div>
-              <h3 className='font-display text-[1.375rem] text-ink mb-1.5'>
-                For the patient.
-              </h3>
-              <p className='text-[15px] text-ink-slate max-w-[56ch]'>
-                Plain language. Actionable. Written to be read at the kitchen
-                table.
-              </p>
+            <div className='flex items-start justify-between gap-4'>
+              <div>
+                <h3 className='font-display text-[1.375rem] text-ink mb-1.5'>
+                  For the patient.
+                </h3>
+                <p className='text-[15px] text-ink-slate max-w-[56ch]'>
+                  Plain language. Actionable. Written to be read at the kitchen
+                  table.
+                </p>
+              </div>
+              <VoiceOutput text={message} label='Read patient message aloud' />
             </div>
 
             <div className='rounded-xl border border-line bg-surface p-6'>
@@ -994,17 +1026,30 @@ export function CaseWorkspace() {
                 value={followupPrior}
                 onChange={e => setFollowupPrior(e.target.value)}
               />
-              <button
-                type='button'
-                className='btn-ghost h-11'
-                disabled={!followupQ.trim() || !!busy}
-                onClick={() => void runFollowup()}
-              >
-                Ask follow-up
-                <span aria-hidden>→</span>
-              </button>
+              <div className='flex items-center gap-3'>
+                <button
+                  type='button'
+                  className='btn-ghost h-11'
+                  disabled={!followupQ.trim() || !!busy}
+                  onClick={() => void runFollowup()}
+                >
+                  Ask follow-up
+                  <span aria-hidden>→</span>
+                </button>
+                <VoiceInput
+                  label='Dictate follow-up question'
+                  disabled={!!busy}
+                  onTranscript={(t) =>
+                    setFollowupQ((s) => (s ? `${s.trimEnd()} ${t}` : t))
+                  }
+                />
+              </div>
               {followupReply && (
                 <div className='mt-4 border-t border-line pt-4'>
+                  <div className='flex items-start justify-between gap-3 mb-2'>
+                    <span className='mono-label'>Council reply</span>
+                    <VoiceOutput text={followupReply} label='Read reply aloud' />
+                  </div>
                   <Markdown>{followupReply}</Markdown>
                 </div>
               )}
