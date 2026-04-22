@@ -1,5 +1,6 @@
 import Link from "next/link";
-import { PricingTable, Show, SignInButton, SignUpButton } from "@clerk/nextjs";
+import { PricingTable } from "@clerk/nextjs";
+import { HeroCta } from "@/components/landing/HeroCta";
 
 const SPECIALISTS = [
   "Internal medicine",
@@ -97,16 +98,7 @@ export default function LandingPage() {
             </p>
 
             <div className="flex flex-wrap items-center gap-3 mb-6 rise rise-5">
-              <Show when="signed-out">
-                <SignUpButton mode="modal"><button className="btn-indigo">Begin a consultation →</button></SignUpButton>
-                <SignInButton mode="modal"><button className="btn-ghost">I already have an account</button></SignInButton>
-              </Show>
-              <Show when="signed-in">
-                <Link href="/case" className="btn-indigo">
-                  Continue to the council
-                  <span aria-hidden>→</span>
-                </Link>
-              </Show>
+              <HeroCta />
             </div>
 
             <p className="mono-label max-w-md leading-relaxed rise rise-6">
