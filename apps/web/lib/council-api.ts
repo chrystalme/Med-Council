@@ -1,6 +1,11 @@
+// When NEXT_PUBLIC_API_BASE_URL is explicitly set we target the backend directly
+// (useful for server-side tools, mobile clients, etc). Otherwise we issue
+// same-origin requests and rely on Next.js rewrites (next.config.ts) to
+// forward /api/* to the FastAPI backend — that avoids CORS and keeps the
+// browser address bar usable for quick checks (e.g. opening /api/me).
 const base = () =>
   (typeof process !== "undefined" && process.env.NEXT_PUBLIC_API_BASE_URL) ||
-  "http://localhost:8000";
+  "";
 
 export type CouncilErrorDetail = {
   code?: string;
