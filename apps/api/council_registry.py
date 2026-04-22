@@ -1,11 +1,89 @@
 """
-MedAI Council — shared registry (specialists, model id, prompt fragments).
+MedAI Council — shared registry (specialists, model allowlist, prompt fragments).
 """
 
 from __future__ import annotations
 
-# Newest NVIDIA flagship on OpenRouter (Dec 2025) — free tier.
-MODEL = "nvidia/nemotron-3-super-120b-a12b:free"
+from typing import Literal, TypedDict
+
+
+class ModelEntry(TypedDict):
+    id: str
+    label: str
+    tier: Literal["free", "pro"]
+    description: str
+
+
+# Curated allowlist. Keys are stable identifiers the frontend sends; `id` is the
+# OpenRouter slug routed through MultiProvider in main.py's startup.
+MODELS: dict[str, ModelEntry] = {
+    "nvidia-nemotron-free": {
+        "id": "nvidia/nemotron-3-super-120b-a12b:free",
+        "label": "Nemotron 120B",
+        "tier": "free",
+        "description": "NVIDIA flagship open-weight · free tier",
+    },
+    "claude-opus-4-7": {
+        "id": "anthropic/claude-opus-4.7",
+        "label": "Claude Opus 4.7",
+        "tier": "pro",
+        "description": "Anthropic's most capable model",
+    },
+    "gpt-5": {
+        "id": "openai/gpt-5",
+        "label": "GPT-5",
+        "tier": "pro",
+        "description": "OpenAI's flagship reasoning model",
+    },
+    "gemini-2-5-pro": {
+        "id": "google/gemini-2.5-pro",
+        "label": "Gemini 2.5 Pro",
+        "tier": "pro",
+        "description": "Google's flagship with 1M context",
+    },
+    "deepseek-r1": {
+        "id": "deepseek/deepseek-r1",
+        "label": "DeepSeek R1",
+        "tier": "pro",
+        "description": "Strong reasoning at lower cost",
+    },
+}
+
+DEFAULT_MODEL_KEY = "nvidia-nemotron-free"
+
+# Back-compat alias so existing council.py agent definitions keep compiling
+# until we migrate them to accept a per-run model override.
+MODEL = MODELS[DEFAULT_MODEL_KEY]["id"]
+
+
+def resolve_model(key: str | None, user_plan: Literal["free", "pro"]) -> tuple[str, bool]:
+    """Resolve a model allowlist key to an OpenRouter slug, enforcing tier.
+
+    Returns (slug, downgraded) where `downgraded=True` means the requested key
+    was Pro-only but the user is on Free, so we silently fell back to the
+    default free model. Callers should add `X-Model-Downgraded: 1` to the
+    response in that case.
+    """
+    chosen_key = key if key in MODELS else DEFAULT_MODEL_KEY
+    entry = MODELS[chosen_key]
+    if entry["tier"] == "pro" and user_plan != "pro":
+        return MODELS[DEFAULT_MODEL_KEY]["id"], True
+    return entry["id"], False
+
+
+def models_for_plan(user_plan: Literal["free", "pro"]) -> list[dict]:
+    """Return the allowlist as a JSON-safe list, with a `locked` flag for UI lock icons."""
+    return [
+        {
+            "key": key,
+            "id": entry["id"],
+            "label": entry["label"],
+            "tier": entry["tier"],
+            "description": entry["description"],
+            "locked": entry["tier"] == "pro" and user_plan != "pro",
+        }
+        for key, entry in MODELS.items()
+    ]
 
 SPECIALIST_META: dict[str, dict] = {
     "internal_medicine": {

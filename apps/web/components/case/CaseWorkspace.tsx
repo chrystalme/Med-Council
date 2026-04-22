@@ -6,6 +6,7 @@ import { councilJson } from '@/lib/council-api';
 import { PaywallBanner } from './PaywallBanner';
 import { Markdown } from './Markdown';
 import { ConsensusView } from './ConsensusView';
+import { ModelSelector, useStoredModelKey } from './ModelSelector';
 
 type Physician = {
   id: string;
@@ -86,6 +87,7 @@ export function CaseWorkspace() {
 
   const [step, setStep] = useState(0);
   const [maxStep, setMaxStep] = useState(0);
+  const [modelKey, setModelKey] = useStoredModelKey('nvidia-nemotron-free');
 
   const advanceTo = useCallback((n: number) => {
     setStep(n);
@@ -250,7 +252,7 @@ export function CaseWorkspace() {
         {
           method: 'POST',
           token: tok,
-          body: JSON.stringify({ symptoms }),
+          body: JSON.stringify({ symptoms, model: modelKey }),
         },
       );
       const lines = parseNumberedQuestions(data.questions);
@@ -287,7 +289,7 @@ export function CaseWorkspace() {
       }>(`/api/deliberation/select-experts`, {
         method: 'POST',
         token: tok,
-        body: JSON.stringify({ symptoms, followup_answers: fqJoined }),
+        body: JSON.stringify({ symptoms, followup_answers: fqJoined, model: modelKey }),
       });
       setCouncilRoster(data.experts ?? []);
       setDeliberationCaseSummary(data.case_summary ?? '');
@@ -337,6 +339,7 @@ export function CaseWorkspace() {
             followup_answers: fqJoined,
             prior_assessments: prior,
             council_context: ctx,
+            model: modelKey,
           }),
         });
         out.push({
@@ -372,6 +375,7 @@ export function CaseWorkspace() {
             specialty: p.specialty,
             assessment: p.assessment ?? '',
           })),
+          model: modelKey,
         }),
       });
       setResearch(data.papers ?? []);
@@ -403,6 +407,7 @@ export function CaseWorkspace() {
               assessment: p.assessment ?? '',
             })),
             research,
+            model: modelKey,
           }),
         },
       );
@@ -433,6 +438,7 @@ export function CaseWorkspace() {
             specialty: p.specialty,
             assessment: p.assessment ?? '',
           })),
+          model: modelKey,
         }),
       });
       setPlan(data.plan ?? '');
@@ -453,7 +459,7 @@ export function CaseWorkspace() {
       const data = await councilJson<{ message: string }>(`/api/message`, {
         method: 'POST',
         token: tok,
-        body: JSON.stringify({ symptoms, consensus, plan }),
+        body: JSON.stringify({ symptoms, consensus, plan, model: modelKey }),
       });
       setMessage(data.message ?? '');
       advanceTo(7);
@@ -514,6 +520,7 @@ export function CaseWorkspace() {
             consensus,
             plan,
             patient_message: message,
+            model: modelKey,
           }),
         },
       );
@@ -562,8 +569,15 @@ export function CaseWorkspace() {
 
       {/* Stage timeline — horizontal on desktop, with numerals + status dots */}
       <div>
-        <div className='flex items-center justify-between mb-4'>
-          <span className='stage-marker'>Pipeline</span>
+        <div className='flex flex-wrap items-center justify-between gap-3 mb-4'>
+          <div className='flex items-center gap-3'>
+            <span className='stage-marker'>Pipeline</span>
+            <ModelSelector
+              value={modelKey}
+              onChange={setModelKey}
+              disabled={!!busy}
+            />
+          </div>
           <button
             type='button'
             className='mono-label text-ink-muted hover:text-indigo transition-colors inline-flex items-center gap-2'

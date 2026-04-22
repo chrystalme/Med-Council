@@ -29,7 +29,7 @@ from typing import Annotated, Any, Optional
 from dotenv import load_dotenv
 from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Request, Response, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
 from openai import AsyncOpenAI
@@ -74,6 +74,7 @@ from council import (
     research_agent,
     triage_agent,
 )
+from council_registry import DEFAULT_MODEL_KEY, models_for_plan, resolve_model
 
 load_dotenv(override=True)
 
@@ -262,22 +263,52 @@ async def _rate_limit_middleware(request: Request, call_next):
 #  Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
-async def run_agent_raw(agent: Agent, prompt: str) -> Any:
-    """Run an agent and return `final_output` (str or Pydantic model when `output_type` is set)."""
+async def run_agent_raw(agent: Agent, prompt: str, *, model: str | None = None) -> Any:
+    """Run an agent and return `final_output`.
+
+    If `model` is provided (an OpenRouter model slug already resolved via
+    `resolve_model`), it overrides the agent's bound model for this run. The
+    MultiProvider with `unknown_prefix_mode="model_id"` accepts arbitrary
+    slugs, so per-call overrides work without re-instantiating the agent.
+    """
     rc = RunConfig(
         model_provider=_council_model_provider or MultiProvider(),
+        model=model,  # None falls through to agent.model
         trace_include_sensitive_data=True,
     )
     result = await Runner.run(agent, prompt, run_config=rc)
     return result.final_output
 
 
-async def run_agent(agent: Agent, prompt: str) -> str:
+async def run_agent(agent: Agent, prompt: str, *, model: str | None = None) -> str:
     """Run an agent and return its final output as a string."""
-    output = await run_agent_raw(agent, prompt)
+    output = await run_agent_raw(agent, prompt, model=model)
     if isinstance(output, str):
         return output
     return output.model_dump_json() if hasattr(output, "model_dump_json") else str(output)
+
+
+def _resolve_for_request(
+    req: BaseModel,
+    user: "AuthUser | None",
+    response: "Response",
+) -> str:
+    """Resolve the OpenRouter slug for this request, set downgrade headers, return the slug.
+
+    Every pipeline endpoint calls this to look up the user's choice of model
+    from the allowlist, enforce the free/pro tier split silently, and pass the
+    slug into run_agent(...). `req.model` is an allowlist key (e.g.
+    "claude-opus-4-7"); the returned value is the OpenRouter slug.
+    """
+    from auth import effective_plan  # local import to avoid circular at module load
+
+    requested = getattr(req, "model", None)
+    plan = effective_plan(user)
+    slug, downgraded = resolve_model(requested, plan)
+    if downgraded:
+        response.headers["X-Model-Downgraded"] = "1"
+        response.headers["X-Model-Downgrade-Reason"] = "plan_required"
+    return slug
 
 
 def _format_intake_questions_for_api(out: Any) -> str:
@@ -412,11 +443,23 @@ def _pubmed_search_papers(term: str, *, retmax: int = 4) -> list[dict]:
 SymptomsIn = PatientSymptomsIn
 
 
-class TriageIn(BaseModel):
+class _ModeledRequest(BaseModel):
+    """Mixin: every agent-running endpoint accepts an optional `model` key.
+
+    The key must match an entry in council_registry.MODELS. Free-tier users
+    asking for a Pro model are silently downgraded (see resolve_model),
+    with X-Model-Downgraded: 1 set on the response.
+    """
+
+    model: str | None = None
+
+
+class TriageIn(_ModeledRequest):
     symptoms: str
     followup_answers: str
 
-class SpecialistIn(BaseModel):
+
+class SpecialistIn(_ModeledRequest):
     specialist_id: str
     symptoms: str
     followup_answers: str
@@ -424,7 +467,7 @@ class SpecialistIn(BaseModel):
     council_context: str = ""
 
 
-class PhysicianIn(BaseModel):
+class PhysicianIn(_ModeledRequest):
     """Alias for SpecialistIn to match frontend naming"""
     physician_id: str
     symptoms: str
@@ -433,33 +476,33 @@ class PhysicianIn(BaseModel):
     council_context: str = ""
 
 
-class ResearchIn(BaseModel):
+class ResearchIn(_ModeledRequest):
     symptoms: str
     followup_answers: str
     assessments: list[dict]
 
 
-class ConsensusIn(BaseModel):
+class ConsensusIn(_ModeledRequest):
     symptoms: str
     followup_answers: str
     assessments: list[dict]
     research: list[dict]
 
 
-class PlanIn(BaseModel):
+class PlanIn(_ModeledRequest):
     symptoms: str
     followup_answers: str
     consensus: dict
     assessments: list[dict]
 
 
-class MessageIn(BaseModel):
+class MessageIn(_ModeledRequest):
     symptoms: str
     consensus: dict
     plan: str
 
 
-class PatientFollowUpIn(BaseModel):
+class PatientFollowUpIn(_ModeledRequest):
     """Post–patient-message Q&A; optional prior diagnostics for reconciling with council output."""
 
     question: Annotated[str, Field(min_length=1, max_length=8000)]
@@ -713,11 +756,38 @@ _FEEDBACK_PAGE = """<!doctype html>
 
 
 # ─────────────────────────────────────────────────────────────────────────────
+#  Model selector catalog
+# ─────────────────────────────────────────────────────────────────────────────
+
+@app.get("/api/models")
+async def list_models(
+    user: Optional[AuthUser] = Depends(current_user_maybe_required),
+):
+    """Return the model allowlist visible to this user, with `locked` flags for
+    Pro-only entries when the caller is on the Free tier. The frontend dropdown
+    uses this to render the picker.
+    """
+    from auth import effective_plan
+
+    plan = effective_plan(user)
+    return {
+        "default": DEFAULT_MODEL_KEY,
+        "plan": plan,
+        "models": models_for_plan(plan),
+    }
+
+
+# ─────────────────────────────────────────────────────────────────────────────
 #  Stage 1 — Intake
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.post("/api/intake/followup", dependencies=[Depends(current_user_maybe_required)])
-async def intake_followup(req: SymptomsIn):
+@app.post("/api/intake/followup")
+async def intake_followup(
+    req: SymptomsIn,
+    response: Response,
+    user: Optional[AuthUser] = Depends(current_user_maybe_required),
+):
+    model_slug = _resolve_for_request(req, user, response)
     try:
         with traced_workflow(
             "Intake Follow-up Questions",
@@ -726,6 +796,7 @@ async def intake_followup(req: SymptomsIn):
             raw_text = await run_agent(
                 intake_agent,
                 f"Patient self-reports: {req.symptoms}",
+                model=model_slug,
             )
     except InputGuardrailTripwireTriggered as e:
         info = e.guardrail_result.output.output_info if e.guardrail_result.output else {}
@@ -750,8 +821,13 @@ async def intake_followup(req: SymptomsIn):
 #  Stage 2 — Triage
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.post("/api/triage", dependencies=[Depends(current_user_maybe_required)])
-async def triage(req: TriageIn):
+@app.post("/api/triage")
+async def triage(
+    req: TriageIn,
+    response: Response,
+    user: Optional[AuthUser] = Depends(current_user_maybe_required),
+):
+    model_slug = _resolve_for_request(req, user, response)
     prompt = (
         f"Patient symptoms: {req.symptoms}\n\n"
         f"Patient follow-up responses: {req.followup_answers}"
@@ -760,7 +836,7 @@ async def triage(req: TriageIn):
         "Triage: Specialist Selection",
         metadata={"stage": "2-triage", "symptoms": _truncate(req.symptoms)},
     ):
-        raw = await run_agent(triage_agent, prompt)
+        raw = await run_agent(triage_agent, prompt, model=model_slug)
 
     try:
         data = parse_json(raw)
@@ -787,9 +863,14 @@ async def triage(req: TriageIn):
 #  Stage 2b — Deliberation Expert Selection (optional alternative to triage)
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.post("/api/deliberation/select-experts", dependencies=[Depends(current_user_maybe_required)])
-async def select_deliberation_experts(req: TriageIn):
+@app.post("/api/deliberation/select-experts")
+async def select_deliberation_experts(
+    req: TriageIn,
+    response: Response,
+    user: Optional[AuthUser] = Depends(current_user_maybe_required),
+):
     """Select 4–6 expert specialists for structured deliberation (symptoms + follow-up answers)."""
+    model_slug = _resolve_for_request(req, user, response)
     prompt = (
         f"Patient symptoms: {req.symptoms}\n\n"
         f"Patient follow-up responses: {req.followup_answers}"
@@ -798,7 +879,7 @@ async def select_deliberation_experts(req: TriageIn):
         "Expert Selection for Deliberation",
         metadata={"stage": "2b-deliberation-select", "symptoms": _truncate(req.symptoms)},
     ):
-        raw = await run_agent(deliberation_selector_agent, prompt)
+        raw = await run_agent(deliberation_selector_agent, prompt, model=model_slug)
 
     try:
         data = parse_json(raw)
@@ -873,8 +954,13 @@ def _council_context_block(council_context: str) -> str:
     return f"\n\nDeliberation lead framing (use alongside the chart):\n{t}"
 
 
-@app.post("/api/council/specialist", dependencies=[Depends(current_user_maybe_required)])
-async def council_specialist(req: SpecialistIn):
+@app.post("/api/council/specialist")
+async def council_specialist(
+    req: SpecialistIn,
+    response: Response,
+    user: Optional[AuthUser] = Depends(current_user_maybe_required),
+):
+    model_slug = _resolve_for_request(req, user, response)
     if req.specialist_id not in SPECIALIST_AGENTS:
         raise HTTPException(
             status_code=400,
@@ -907,16 +993,21 @@ async def council_specialist(req: SpecialistIn):
             "symptoms": _truncate(req.symptoms),
         },
     ):
-        assessment = await run_agent(SPECIALIST_AGENTS[req.specialist_id], prompt)
+        assessment = await run_agent(SPECIALIST_AGENTS[req.specialist_id], prompt, model=model_slug)
     return {
         "specialist": {"id": req.specialist_id, **SPECIALIST_META[req.specialist_id]},
         "assessment": assessment,
     }
 
 
-@app.post("/api/council/physician", dependencies=[Depends(current_user_maybe_required)])
-async def council_physician(req: PhysicianIn):
+@app.post("/api/council/physician")
+async def council_physician(
+    req: PhysicianIn,
+    response: Response,
+    user: Optional[AuthUser] = Depends(current_user_maybe_required),
+):
     """Alias for council_specialist to match frontend naming (physician_id instead of specialist_id)"""
+    model_slug = _resolve_for_request(req, user, response)
     if req.physician_id not in SPECIALIST_AGENTS:
         raise HTTPException(
             status_code=400,
@@ -949,7 +1040,7 @@ async def council_physician(req: PhysicianIn):
             "symptoms": _truncate(req.symptoms),
         },
     ):
-        assessment = await run_agent(SPECIALIST_AGENTS[req.physician_id], prompt)
+        assessment = await run_agent(SPECIALIST_AGENTS[req.physician_id], prompt, model=model_slug)
     return {
         "specialist": {"id": req.physician_id, **SPECIALIST_META[req.physician_id]},
         "assessment": assessment,
@@ -960,8 +1051,13 @@ async def council_physician(req: PhysicianIn):
 #  Stage 4 — Research
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.post("/api/research", dependencies=[Depends(current_user_maybe_required)])
-async def research(req: ResearchIn):
+@app.post("/api/research")
+async def research(
+    req: ResearchIn,
+    response: Response,
+    user: Optional[AuthUser] = Depends(current_user_maybe_required),
+):
+    model_slug = _resolve_for_request(req, user, response)
     assessments_text = "\n\n".join(
         f"{a['name']} ({a['specialty']}):\n{a['assessment']}" for a in req.assessments
     )
@@ -978,7 +1074,7 @@ async def research(req: ResearchIn):
             "symptoms": _truncate(req.symptoms),
         },
     ):
-        raw = await run_agent(research_agent, prompt)
+        raw = await run_agent(research_agent, prompt, model=model_slug)
 
     with custom_span("parse_research_papers", data={"source": "model_output"}):
         papers, parse_warning = parse_research_papers(raw)
@@ -1004,8 +1100,13 @@ async def research(req: ResearchIn):
 #  Stage 5 — Consensus / Diagnosis
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.post("/api/consensus", dependencies=[Depends(current_user_maybe_required)])
-async def consensus(req: ConsensusIn):
+@app.post("/api/consensus")
+async def consensus(
+    req: ConsensusIn,
+    response: Response,
+    user: Optional[AuthUser] = Depends(current_user_maybe_required),
+):
+    model_slug = _resolve_for_request(req, user, response)
     assessments_text = "\n\n".join(
         f"{a['name']} ({a['specialty']}):\n{a['assessment']}" for a in req.assessments
     )
@@ -1028,7 +1129,7 @@ async def consensus(req: ConsensusIn):
             "symptoms": _truncate(req.symptoms),
         },
     ):
-        raw = await run_agent(consensus_agent, prompt)
+        raw = await run_agent(consensus_agent, prompt, model=model_slug)
 
     try:
         data = parse_json(raw)
@@ -1051,8 +1152,13 @@ async def consensus(req: ConsensusIn):
 #  Stage 6 — Treatment Plan
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.post("/api/plan", dependencies=[Depends(current_user_maybe_required)])
-async def plan(req: PlanIn):
+@app.post("/api/plan")
+async def plan(
+    req: PlanIn,
+    response: Response,
+    user: Optional[AuthUser] = Depends(current_user_maybe_required),
+):
+    model_slug = _resolve_for_request(req, user, response)
     assessments_text = "\n\n".join(
         f"{a['name']} ({a['specialty']}):\n{a['assessment']}" for a in req.assessments
     )
@@ -1070,7 +1176,7 @@ async def plan(req: PlanIn):
             "symptoms": _truncate(req.symptoms),
         },
     ):
-        plan_text = await run_agent(plan_agent, prompt)
+        plan_text = await run_agent(plan_agent, prompt, model=model_slug)
     return {"plan": plan_text}
 
 
@@ -1078,8 +1184,13 @@ async def plan(req: PlanIn):
 #  Stage 7 — Patient Message
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.post("/api/message", dependencies=[Depends(current_user_maybe_required)])
-async def patient_message(req: MessageIn):
+@app.post("/api/message")
+async def patient_message(
+    req: MessageIn,
+    response: Response,
+    user: Optional[AuthUser] = Depends(current_user_maybe_required),
+):
+    model_slug = _resolve_for_request(req, user, response)
     prompt = (
         f"Primary diagnosis: {req.consensus.get('primaryDiagnosis')} "
         f"(confidence {req.consensus.get('confidence')}%, {req.consensus.get('urgency')} urgency)\n"
@@ -1098,13 +1209,18 @@ async def patient_message(req: MessageIn):
             "symptoms": _truncate(req.symptoms),
         },
     ):
-        message = await run_agent(message_agent, prompt)
+        message = await run_agent(message_agent, prompt, model=model_slug)
     return {"message": message}
 
 
-@app.post("/api/message/followup", dependencies=[Depends(current_user_maybe_required)])
-async def patient_message_followup(req: PatientFollowUpIn):
+@app.post("/api/message/followup")
+async def patient_message_followup(
+    req: PatientFollowUpIn,
+    response: Response,
+    user: Optional[AuthUser] = Depends(current_user_maybe_required),
+):
     """Answer patient questions after the final message; optional prior diagnostics for context."""
+    model_slug = _resolve_for_request(req, user, response)
     prior = ""
     if req.prior_diagnostics.strip():
         prior = f"\n\nPrior diagnostics / records the patient cites:\n{req.prior_diagnostics.strip()}"
@@ -1126,5 +1242,5 @@ async def patient_message_followup(req: PatientFollowUpIn):
             "symptoms": _truncate(req.symptoms),
         },
     ):
-        reply = await run_agent(followup_qa_agent, prompt)
+        reply = await run_agent(followup_qa_agent, prompt, model=model_slug)
     return {"reply": reply}

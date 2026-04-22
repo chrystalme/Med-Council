@@ -25,6 +25,10 @@ class PatientSymptomsIn(BaseModel):
     """Structured intake request body (mirrors API; optional use in docs/tests)."""
 
     symptoms: Annotated[str, Field(min_length=1, description="Patient's self-reported symptoms.")]
+    model: str | None = Field(
+        default=None,
+        description="Optional allowlist key from council_registry.MODELS. Free users picking a Pro model are silently downgraded.",
+    )
 
     @field_validator("symptoms", mode="before")
     @classmethod
