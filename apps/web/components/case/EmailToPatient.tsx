@@ -3,7 +3,7 @@
 import { useAuth } from "@clerk/nextjs";
 import { useCallback, useState } from "react";
 import { councilJson } from "@/lib/council-api";
-import { useIsPro } from "@/lib/entitlements";
+import { useClientMounted, useIsPro } from "@/lib/entitlements";
 
 type Props = {
   consensus: Record<string, unknown> | null;
@@ -24,6 +24,9 @@ export function EmailToPatient({
 }: Props) {
   const { getToken } = useAuth();
   const { isPro } = useIsPro();
+  const mounted = useClientMounted();
+  /** Pro styling in DOM only after mount so SSR matches first client paint. */
+  const proUi = mounted && isPro;
 
   const [open, setOpen] = useState(false);
   const [to, setTo] = useState("");
@@ -83,14 +86,14 @@ export function EmailToPatient({
         }}
         className={[
           "inline-flex items-center gap-2 rounded-full border text-[13.5px] px-4 py-1.5 transition-colors",
-          isPro
+          proUi
             ? "border-indigo bg-indigo text-paper hover:bg-indigo-hover"
             : "border-line-strong text-ink-muted hover:border-indigo hover:text-indigo",
         ].join(" ")}
       >
         <span aria-hidden>✉</span>
         Email summary to patient
-        {!isPro && <span className="mono-label opacity-70">pro</span>}
+        {!proUi && <span className="mono-label opacity-70">pro</span>}
       </button>
     );
   }

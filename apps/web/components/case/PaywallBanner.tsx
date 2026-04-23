@@ -2,11 +2,12 @@
 
 import Link from "next/link";
 import { useState } from "react";
-import { useIsPro } from "@/lib/entitlements";
+import { useClientMounted, useIsPro } from "@/lib/entitlements";
 
 /**
  * Inline banner shown at the top of the workspace when the user is on the
- * Free tier and `NEXT_PUBLIC_FEATURE_PAYWALL=1`. Pro users see nothing.
+ * Free tier and `NEXT_PUBLIC_FEATURE_PAYWALL=1`. Pro users see nothing after
+ * client mount (same instant as {@link useIsPro} settles) to avoid SSR/CSR HTML drift.
  *
  * The real entitlement check reaches Clerk Billing via useIsPro(); the env
  * gate lets devs hide the banner while developing locally without signing
@@ -14,8 +15,9 @@ import { useIsPro } from "@/lib/entitlements";
  */
 export function PaywallBanner() {
   const { isPro, refresh } = useIsPro();
+  const mounted = useClientMounted();
   const [refreshing, setRefreshing] = useState(false);
-  if (isPro) return null;
+  if (mounted && isPro) return null;
   if (process.env.NEXT_PUBLIC_FEATURE_PAYWALL !== "1") return null;
 
   return (

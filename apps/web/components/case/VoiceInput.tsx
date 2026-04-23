@@ -3,7 +3,7 @@
 import { useAuth } from "@clerk/nextjs";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { CouncilApiError, councilFetch, type CouncilErrorDetail } from "@/lib/council-api";
-import { useIsPro } from "@/lib/entitlements";
+import { useClientMounted, useIsPro } from "@/lib/entitlements";
 
 type Props = {
   onTranscript: (text: string) => void;
@@ -45,7 +45,6 @@ function createBrowserRecognition(): Recognition | null {
 export function VoiceInput({ onTranscript, disabled, label = "Voice input", onPaywallError }: Props) {
   const { getToken } = useAuth();
   const { isPro } = useIsPro();
-  const mode: Mode = isPro ? "server" : "browser";
 
   const [listening, setListening] = useState(false);
   const [processing, setProcessing] = useState(false);
@@ -56,18 +55,20 @@ export function VoiceInput({ onTranscript, disabled, label = "Voice input", onPa
   const chunksRef = useRef<BlobPart[]>([]);
   const committedRef = useRef<string>("");
 
+  const mounted = useClientMounted();
+  const mode: Mode = mounted && isPro ? "server" : "browser";
+
   // Detect browser support for Free tier. Deferred to a post-mount effect
   // so SSR output matches the first client render (otherwise `typeof window`
   // diverges and React complains about hydration mismatches on `disabled` /
   // `title` attrs).
   const [browserSupported, setBrowserSupported] = useState(false);
   useEffect(() => {
-    setBrowserSupported(
-      !!(
-        (window as unknown as { SpeechRecognition?: unknown }).SpeechRecognition ||
-        (window as unknown as { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition
-      )
+    const supported = !!(
+      (window as unknown as { SpeechRecognition?: unknown }).SpeechRecognition ||
+      (window as unknown as { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition
     );
+    queueMicrotask(() => setBrowserSupported(supported));
   }, []);
 
   const stopBrowser = useCallback(() => {
