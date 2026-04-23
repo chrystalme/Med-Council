@@ -56,13 +56,19 @@ export function VoiceInput({ onTranscript, disabled, label = "Voice input", onPa
   const chunksRef = useRef<BlobPart[]>([]);
   const committedRef = useRef<string>("");
 
-  // Detect browser support for Free tier.
-  const browserSupported =
-    typeof window !== "undefined" &&
-    !!(
-      (window as unknown as { SpeechRecognition?: unknown }).SpeechRecognition ||
-      (window as unknown as { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition
+  // Detect browser support for Free tier. Deferred to a post-mount effect
+  // so SSR output matches the first client render (otherwise `typeof window`
+  // diverges and React complains about hydration mismatches on `disabled` /
+  // `title` attrs).
+  const [browserSupported, setBrowserSupported] = useState(false);
+  useEffect(() => {
+    setBrowserSupported(
+      !!(
+        (window as unknown as { SpeechRecognition?: unknown }).SpeechRecognition ||
+        (window as unknown as { webkitSpeechRecognition?: unknown }).webkitSpeechRecognition
+      )
     );
+  }, []);
 
   const stopBrowser = useCallback(() => {
     try {
