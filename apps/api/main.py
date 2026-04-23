@@ -30,6 +30,11 @@ from pathlib import Path
 from contextlib import asynccontextmanager, contextmanager
 from typing import Annotated, Any, Optional
 from dotenv import load_dotenv
+
+# `auth` snapshots CLERK_ISSUER (and related env) at import time — load `.env` first.
+load_dotenv(Path(__file__).resolve().parent / ".env", override=True)
+load_dotenv(override=True)
+
 from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, UploadFile, File, Form
@@ -82,8 +87,6 @@ from council import (
     triage_agent,
 )
 from council_registry import DEFAULT_MODEL_KEY, models_for_plan, resolve_model
-
-load_dotenv(override=True)
 
 # OpenRouter models like nvidia/... use an unknown MultiProvider prefix — pass full ID to the client.
 _council_model_provider: MultiProvider | None = None
@@ -824,7 +827,13 @@ async def me(
                    immediately after subscribing so you don't have to wait
                    up to 60s for the cache to expire).
     """
-    from auth import effective_plan, invalidate_plan_cache, _plan_from_clerk_api
+    from auth import (
+        _plan_from_claims,
+        _plan_from_clerk_api,
+        auth_configured,
+        effective_plan,
+        invalidate_plan_cache,
+    )
 
     if refresh and user:
         invalidate_plan_cache(user.user_id)
@@ -837,7 +846,8 @@ async def me(
     }
 
     if debug:
-        # Decode the JWT without re-verifying (already verified upstream).
+        # Decode the JWT without verifying — useful when CLERK_ISSUER is unset
+        # or verification fails, so you can still read iss / pla / fea.
         import jwt as _jwt
 
         token = (request.headers.get("authorization") or "").removeprefix("Bearer ").strip()
@@ -847,11 +857,26 @@ async def me(
                 raw_claims = _jwt.decode(token, options={"verify_signature": False})
             except Exception as exc:
                 raw_claims = {"__decode_error__": str(exc)}
-        payload["debug"] = {
+
+        unverified_plan: str | None = None
+        if isinstance(raw_claims, dict) and "__decode_error__" not in raw_claims:
+            unverified_plan = _plan_from_claims(raw_claims)
+
+        dbg: dict[str, Any] = {
             "jwt_plan_from_claims": user.plan if user else None,
             "clerk_api_plan": _plan_from_clerk_api(user.user_id) if user else "free",
             "raw_claims": raw_claims,
+            "clerk_jwt_verification_enabled": auth_configured(),
+            "plan_from_unverified_jwt_claims": unverified_plan,
         }
+        if token and user is None and not auth_configured():
+            iss = raw_claims.get("iss") if isinstance(raw_claims, dict) else None
+            dbg["fix_hint"] = (
+                "FastAPI is not verifying Clerk JWTs (CLERK_ISSUER unset in apps/api/.env). "
+                "Every request is anonymous — resolved plan stays free even though the browser token has Pro claims. "
+                f"Set CLERK_ISSUER to your session JWT iss (e.g. {iss!r})."
+            )
+        payload["debug"] = dbg
 
     return payload
 
