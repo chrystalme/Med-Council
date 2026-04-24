@@ -746,16 +746,21 @@ async def serve_root():
     JSON pointer instead of the legacy `static/index.html`, which was the old
     Vercel-era UI and is retired.
     """
+    # `Cache-Control: no-store` prevents browsers from caching the old
+    # pre-redirect HTML body (saw that cause "old UI still showing" reports
+    # after the retirement of static/index.html).
+    no_cache_headers = {"Cache-Control": "no-store", "Pragma": "no-cache"}
     web_url = os.environ.get("WEB_BASE_URL", "").strip()
     if web_url:
-        return RedirectResponse(web_url, status_code=302)
+        return RedirectResponse(web_url, status_code=302, headers=no_cache_headers)
     return JSONResponse(
         {
             "service": "MedAI Council API",
             "docs": "/docs",
             "health": "/health",
             "ui": "UI lives on a separate Cloud Run service — set WEB_BASE_URL on this container to auto-redirect.",
-        }
+        },
+        headers=no_cache_headers,
     )
 
 
