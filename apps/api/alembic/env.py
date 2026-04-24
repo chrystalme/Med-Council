@@ -11,7 +11,7 @@ import os
 from logging.config import fileConfig
 
 from alembic import context
-from sqlalchemy import engine_from_config, pool
+from sqlalchemy import create_engine, pool
 
 # Load .env so DATABASE_URL is picked up when running `alembic` from the shell.
 try:
@@ -42,7 +42,10 @@ if _db_url.startswith("postgres://"):
 if _db_url.startswith("postgresql://"):
     _db_url = "postgresql+psycopg://" + _db_url[len("postgresql://") :]
 
-config.set_main_option("sqlalchemy.url", _db_url)
+# NOTE: we deliberately do NOT call `config.set_main_option("sqlalchemy.url", _db_url)`
+# and we do NOT use `engine_from_config`. ConfigParser treats `%` as interpolation
+# syntax, which breaks URL-encoded passwords (`%5D`, `%3A`, …). `create_engine`
+# accepts the raw URL string and bypasses the parser entirely.
 
 
 def run_migrations_offline() -> None:
@@ -56,11 +59,7 @@ def run_migrations_offline() -> None:
 
 
 def run_migrations_online() -> None:
-    connectable = engine_from_config(
-        config.get_section(config.config_ini_section, {}),
-        prefix="sqlalchemy.",
-        poolclass=pool.NullPool,
-    )
+    connectable = create_engine(_db_url, poolclass=pool.NullPool)
     with connectable.connect() as connection:
         context.configure(connection=connection)
         with context.begin_transaction():

@@ -371,12 +371,36 @@ def _is_transient_provider_error(exc: BaseException) -> bool:
     return status in {502, 503, 504, 524, 429}
 
 
+def _is_bad_model_error(exc: BaseException) -> bool:
+    """HTTP 400 from the provider about the model id — retrying won't help.
+
+    Matches OpenRouter's "not a valid model ID" and OpenAI/Groq's equivalents
+    so the caller can surface a structured "pick another model" prompt.
+    """
+    msg = str(exc).lower()
+    if "not a valid model" in msg or "model not found" in msg or "invalid model" in msg:
+        return True
+    if "unknown model" in msg:
+        return True
+    status = getattr(exc, "status_code", None) or getattr(exc, "http_status", None)
+    if status == 400 and "model" in msg:
+        return True
+    return False
+
+
 def _resolve_runtime_model(agent: Agent, model: str | None):
-    """Pick the provider (Groq vs OpenRouter) and clean model slug for this run.
+    """Pick the provider + concrete model for this run.
 
     The `groq:` routing prefix on a slug steers the call to the Groq client.
     Everything else stays on OpenRouter. Falls through to the agent's bound
     model if no per-run override is supplied.
+
+    For the Groq path we construct an `OpenAIChatCompletionsModel` instance
+    here and return it as the `model` value for RunConfig. This bypasses the
+    SDK's provider-lookup path — which we observed does NOT always respect
+    `RunConfig.model_provider` when the agent's own `.model` string has an
+    unknown prefix, causing the raw `groq:…` slug to leak into OpenRouter.
+    RunConfig accepts a concrete Model instance and uses it directly.
     """
     effective = model if model else getattr(agent, "model", None)
     if isinstance(effective, str) and effective.startswith(_GROQ_ROUTING_PREFIX):
@@ -393,7 +417,10 @@ def _resolve_runtime_model(agent: Agent, model: str | None):
                     ),
                 },
             )
-        return _groq_model_provider, clean
+        # Return a pre-bound Model instance — Runner uses it without any further
+        # provider routing, so the `groq:` slug never reaches OpenRouter.
+        model_instance = _groq_model_provider.get_model(clean)
+        return _groq_model_provider, model_instance
     return _council_model_provider or MultiProvider(), effective if isinstance(effective, str) else None
 
 
@@ -420,6 +447,11 @@ async def run_agent_raw(agent: Agent, prompt: str, *, model: str | None = None) 
             return result.final_output
         except Exception as exc:
             last_exc = exc
+            if _is_bad_model_error(exc):
+                # Non-retryable: the model id is wrong or the provider doesn't
+                # know it. Bail out early so the caller gets a structured 400
+                # instead of three pointless retries.
+                break
             if not _is_transient_provider_error(exc) or attempt == max_attempts:
                 break
             delay = 1.5 * (2 ** (attempt - 1))  # 1.5s → 3s → 6s
@@ -429,8 +461,20 @@ async def run_agent_raw(agent: Agent, prompt: str, *, model: str | None = None) 
             )
             await asyncio.sleep(delay)
 
-    # All retries exhausted. Surface as a structured 503 the UI can present nicely.
+    # All retries exhausted (or we bailed early on a non-retryable error).
     assert last_exc is not None
+    if _is_bad_model_error(last_exc):
+        raise HTTPException(
+            status_code=400,
+            detail={
+                "code": "bad_model",
+                "message": (
+                    "The selected model was rejected by the provider. Pick a "
+                    "different model from the selector and try again."
+                ),
+                "provider_message": str(last_exc)[:500],
+            },
+        ) from last_exc
     if _is_transient_provider_error(last_exc):
         raise HTTPException(
             status_code=503,
