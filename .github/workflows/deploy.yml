@@ -1,19 +1,28 @@
 name: Deploy (GCP)
 
-# Manual trigger. Builds the api image, pushes it to Artifact Registry, then
-# runs `terraform apply` to roll Cloud Run onto the new image.
+# Builds both the api and web images, pushes them to Artifact Registry, then
+# runs `terraform apply` to roll Cloud Run onto the new images together so
+# the two services never drift.
 #
-# All workflow inputs and github-context values are passed through `env:`
-# before being referenced in `run:` — no direct `${{ ... }}` interpolation
-# into shell commands, per GitHub Actions injection guidance.
+# Triggers:
+#   - push to main      — automatic on every merge.
+#   - workflow_dispatch — manual button with an optional custom tag override.
 #
-# Required repo-level secrets / vars (one-time setup):
-#   secrets.GCP_WORKLOAD_IDENTITY_PROVIDER — full WIF provider resource name
-#   secrets.GCP_DEPLOY_SA                  — service account email (deploy perms)
-#   vars.GCP_PROJECT_ID                    — project id
-#   vars.GCP_REGION                        — e.g. us-central1
-#   vars.GCP_TF_STATE_BUCKET               — GCS bucket backing terraform state
+# Secrets / context are routed through `env:` before being referenced in
+# `run:` blocks; secrets that get baked into image build args are passed
+# via the action's `build-args:` block only after being pinned to env.
+#
+# Required repo-level config (one-time setup):
+#   secrets.GCP_WORKLOAD_IDENTITY_PROVIDER      WIF provider resource name
+#   secrets.GCP_DEPLOY_SA                       service account email (deploy perms)
+#   secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY   baked into web client bundle
+#   vars.GCP_PROJECT_ID                         project id
+#   vars.GCP_REGION                             e.g. us-central1
+#   vars.GCP_TF_STATE_BUCKET                    GCS bucket backing terraform state
+#   vars.API_BASE_URL                           deployed api URL (web build arg)
 on:
+  push:
+    branches: [main]
   workflow_dispatch:
     inputs:
       image_tag:
@@ -22,6 +31,8 @@ on:
         default: ''
 
 concurrency:
+  # One deploy at a time. `cancel-in-progress: false` lets a running apply
+  # finish rather than getting torn down mid-update.
   group: deploy-gcp
   cancel-in-progress: false
 
@@ -31,7 +42,7 @@ permissions:
 
 jobs:
   deploy:
-    name: Build, push, apply
+    name: Build, push, apply (api + web)
     runs-on: ubuntu-latest
     environment: production
     env:
@@ -40,6 +51,11 @@ jobs:
       TF_STATE_BUCKET: ${{ vars.GCP_TF_STATE_BUCKET }}
       IMAGE_TAG_INPUT: ${{ github.event.inputs.image_tag }}
       COMMIT_SHA: ${{ github.sha }}
+      API_BASE_URL: ${{ vars.API_BASE_URL }}
+      # Pin Clerk publishable key to an env var at job level so the
+      # build-args block can reference it by name rather than by template
+      # expansion inline.
+      NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
     steps:
       - uses: actions/checkout@v4
 
@@ -81,8 +97,27 @@ jobs:
           tags: |
             ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/medai/api:${{ env.RESOLVED_TAG }}
             ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/medai/api:latest
-          cache-from: type=gha
-          cache-to: type=gha,mode=max
+          cache-from: type=gha,scope=api
+          cache-to: type=gha,scope=api,mode=max
+
+      - name: Build and push web image
+        uses: docker/build-push-action@v6
+        with:
+          # Web Dockerfile needs the repo root as context (copies pnpm
+          # workspace manifests + apps/web), so the context here is ".".
+          context: .
+          file: apps/web/Dockerfile
+          push: true
+          platforms: linux/amd64
+          build-args: |
+            NEXT_PUBLIC_API_BASE_URL=
+            API_BASE_URL=${{ env.API_BASE_URL }}
+            NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
+          tags: |
+            ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/medai/web:${{ env.RESOLVED_TAG }}
+            ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/medai/web:latest
+          cache-from: type=gha,scope=web
+          cache-to: type=gha,scope=web,mode=max
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
@@ -93,20 +128,25 @@ jobs:
         working-directory: terraform
         run: terraform init -backend-config="bucket=${TF_STATE_BUCKET}" -input=false
 
-      - name: Terraform apply
+      - name: Terraform apply (rolls api + web onto the new tag)
         working-directory: terraform
         run: |
           terraform apply -input=false -auto-approve \
             -var="project_id=${PROJECT_ID}" \
             -var="region=${REGION}" \
-            -var="image_tag=${RESOLVED_TAG}"
+            -var="image_tag=${RESOLVED_TAG}" \
+            -var="web_image_tag=${RESOLVED_TAG}"
 
-      - name: Report service URL
+      - name: Report service URLs
         working-directory: terraform
         run: |
-          URL="$(terraform output -raw service_url 2>/dev/null || echo 'n/a')"
+          API_URL="$(terraform output -raw service_url 2>/dev/null || echo 'n/a')"
+          WEB_URL="$(terraform output -raw web_service_url 2>/dev/null || echo 'n/a')"
           {
             echo "### Deployment"
-            echo "- image: \`${REGION}-docker.pkg.dev/${PROJECT_ID}/medai/api:${RESOLVED_TAG}\`"
-            echo "- service URL: ${URL}"
+            echo "- tag: \`${RESOLVED_TAG}\`"
+            echo "- api image: \`${REGION}-docker.pkg.dev/${PROJECT_ID}/medai/api:${RESOLVED_TAG}\`"
+            echo "- web image: \`${REGION}-docker.pkg.dev/${PROJECT_ID}/medai/web:${RESOLVED_TAG}\`"
+            echo "- api URL: ${API_URL}"
+            echo "- web URL: ${WEB_URL}"
           } >> "$GITHUB_STEP_SUMMARY"
