@@ -14,20 +14,122 @@ licensed medical advice.
 ```
 medai-council/
 ├── apps/
-│   ├── api/            FastAPI backend — the actual council pipeline
-│   │   ├── main.py     ASGI entrypoint, routes, startup
-│   │   ├── pyproject.toml + uv.lock   Python deps (uv); requirements.txt exported for deploy
-│   │   ├── council.py  Specialist Agent definitions (openai-agents SDK)
-│   │   ├── council_*.py  Registry, schemas, tools, handoffs
-│   │   ├── static/     Legacy vanilla UI (served at /, being phased out)
-│   │   └── requirements.txt
-│   └── web/            Next.js 16 frontend (App Router + Clerk + Tailwind v4)
+│   ├── api/                      FastAPI backend — the actual council pipeline
+│   │   ├── main.py               ASGI entrypoint, routes, startup (Alembic runs here)
+│   │   ├── council.py            Specialist Agent definitions (openai-agents SDK)
+│   │   ├── council_*.py          Registry, schemas, tools, handoffs
+│   │   ├── db.py                 Postgres connection seam (DATABASE_URL)
+│   │   ├── storage.py            Blob storage seam (local FS / GCS)
+│   │   ├── vector_store.py       pgvector store (Vertex stub alongside)
+│   │   ├── attachments.py        Postgres-backed case attachments
+│   │   ├── speech.py             Speech provider swap (OpenRouter/Groq/GCloud)
+│   │   ├── alembic/              Owned schema + migrations
+│   │   ├── Dockerfile            Multi-stage, non-root, runs migrations
+│   │   ├── pyproject.toml + uv.lock   Python deps (uv)
+│   │   └── requirements.txt      Exported from uv.lock for Docker builds
+│   └── web/                      Next.js 16 frontend (App Router + Clerk + Tailwind v4)
+│       ├── app/                  Routes — /, /case, /patient/consultations/[id]
+│       ├── components/case/      CaseWorkspace, PatientFile, ConsultationDetail
+│       └── Dockerfile            Standalone output → Cloud Run
+├── terraform/                    Cloud Run + Cloud SQL + GCS + Secret Manager
+├── docker-compose.yml            Local pg + api + web
+├── .github/workflows/            ci.yml · deploy.yml · destroy.yml
+├── DECISIONS.md                  Why each major choice was made
 ├── pnpm-workspace.yaml
-├── package.json        Monorepo root — pnpm workspace scripts
+├── package.json                  Monorepo root — pnpm workspace scripts
 └── README.md
 ```
 
 Two services, one deploy target: **GCP**. The FastAPI backend runs on Cloud Run with Cloud SQL (Postgres) and Cloud Storage (GCS) for blobs; the Next.js app ships alongside it (Cloud Run service or Firebase Hosting, depending on build needs). Local dev uses your own Postgres and the filesystem — configured entirely by env vars (`DATABASE_URL`, `STORAGE_BACKEND`).
+
+See [`DECISIONS.md`](./DECISIONS.md) for the rationale behind every major
+architectural choice on this page (why Postgres + pgvector over SQLite +
+numpy, why OpenRouter + Groq side-by-side, why Cloud Run over Vercel, etc.).
+
+---
+
+## Architecture
+
+```mermaid
+flowchart TB
+  subgraph Client["Browser — Next.js 16 app (Cloud Run or Firebase Hosting)"]
+    UI[CaseWorkspace · PatientFile · ConsultationDetail]
+    Clerk[Clerk auth widget]
+    UI --> Clerk
+  end
+
+  subgraph Edge["Edge / routing"]
+    Rewrite["/api/* rewrite<br/>(next.config.ts)"]
+  end
+
+  subgraph API["FastAPI backend — Cloud Run (apps/api)"]
+    Routes["Route layer<br/>/api/intake · /triage · /council · /research<br/>/consensus · /plan · /message · /cases · /consultations"]
+    Auth["auth.py<br/>Clerk JWT verify"]
+    RL["Rate limit<br/>(sliding window)"]
+    subgraph Pipeline["Council pipeline (openai-agents SDK)"]
+      Intake[Intake agent] --> Triage[Triage agent]
+      Triage --> Council[16 specialist agents<br/>4–6 chosen per case]
+      Council --> Research[PubMed research agent]
+      Research --> Consensus[Consensus agent<br/>ICD · urgency · confidence]
+      Consensus --> Plan[Plan agent]
+      Plan --> Message[Patient-message agent]
+    end
+    Routes --> Auth --> RL --> Pipeline
+  end
+
+  subgraph Providers["Model & service providers"]
+    Groq["Groq<br/>GPT-OSS-120B · free tier"]
+    OR["OpenRouter<br/>Claude · Gemini · DeepSeek · Nemotron"]
+    Trace["OpenAI (tracing only)"]
+    PubMed["PubMed E-utilities"]
+    Resend["Resend<br/>(on-call + patient email)"]
+    Speech["Speech provider<br/>OpenRouter · Groq · GCloud · disabled"]
+  end
+
+  subgraph Data["Stateful layer"]
+    PG[("Postgres 15 + pgvector<br/>Cloud SQL in prod")]
+    Blob[["Blob storage<br/>local FS (dev) · GCS (prod)"]]
+    subgraph Schema["Alembic-owned schema"]
+      TFeedback[feedback]
+      TCases[cases]
+      TConsults[consultations]
+      TVec[vector_embeddings<br/>vector col · cosine &lt;=&gt;]
+      TAttach[case_attachments<br/>bytea blobs]
+    end
+    PG --- Schema
+  end
+
+  Client -- HTTPS --> Rewrite
+  Rewrite -- same-origin /api --> Routes
+  Pipeline -- default free --> Groq
+  Pipeline -- paid tiers --> OR
+  Pipeline -- traces --> Trace
+  Research --> PubMed
+  Consensus -- urgency=high --> Resend
+  Message --> Resend
+  Routes <--> PG
+  Routes -- attachments metadata --> PG
+  Routes -- attachment blobs --> Blob
+  Routes <--> Speech
+
+  classDef store fill:#eef,stroke:#447,stroke-width:1px;
+  classDef ext fill:#fef9e7,stroke:#9a7d0a;
+  class PG,Blob,Schema,TFeedback,TCases,TConsults,TVec,TAttach store;
+  class Groq,OR,Trace,PubMed,Resend,Speech ext;
+```
+
+**Request path in one line.** Browser → Next.js same-origin `/api/*` rewrite →
+FastAPI (Clerk JWT → rate limit → route handler → seven-stage pipeline of
+openai-agents) → Postgres for state + Groq/OpenRouter for inference + GCS
+(or local FS) for blobs.
+
+**Key seams.**
+
+- `apps/api/db.py` — one `connect()` function, driver chosen by `DATABASE_URL`. Every handler goes through it; swapping Postgres for anything else is a single file.
+- `apps/api/storage.py` — `get_storage()` abstracts blob I/O so the GCS cutover is `STORAGE_BACKEND=gcs` + a bucket name.
+- `apps/api/vector_store.py` — `PostgresVectorStore` today; a `VertexVectorStore` stub is in place for the eventual Vertex AI Vector Search migration.
+- `apps/api/speech.py` — one `OpenAICompatibleSpeechProvider` that points at OpenRouter, Groq, or OpenAI by env var, plus a `gcloud` branch for Google Speech when running on GCP.
+- `apps/api/council_registry.py` — curated model allowlist; `groq:` slug prefix routes through the Groq client, everything else goes through OpenRouter.
 
 ---
 
@@ -209,13 +311,18 @@ See `terraform/README.md` for first-time setup and secret population.
 
 ## Model inference
 
-Currently routed through **OpenRouter → `nvidia/nemotron-3-super-120b-a12b:free`**
-via the `openai-agents` SDK. Free tier has ~20 req/min and ~50-1000/day
-limits; the full council of 16 specialists is selective (4–6 per case) so
-this stays inside the budget for development.
+Two providers are wired side-by-side and routed via slug prefix in
+`apps/api/council_registry.py`:
 
-Swap to the paid variant by editing `MODEL` in
-`apps/api/council_registry.py`.
+- **Free tier (default):** `groq:openai/gpt-oss-120b` — OpenAI's open-weight
+  120B served on Groq. Fast, reliable, and generous on the free plan.
+- **Pro tier:** anything else in the registry (Claude Opus 4.7, Gemini 2.5
+  Pro, DeepSeek R1, Nemotron 120B) routed through **OpenRouter**.
+- **Tracing** goes to OpenAI via `OPENAI_API_KEY` — that key is deliberately
+  not reused for inference or speech (see `DECISIONS.md`).
+
+Users can select a model per case via the `ModelSelector` component; locked
+(pro-only) models return a structured 402 if called without the entitlement.
 
 ---
 
