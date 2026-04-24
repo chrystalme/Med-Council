@@ -15,52 +15,46 @@ class ModelEntry(TypedDict):
 
 
 # Curated allowlist. Keys are stable identifiers the frontend sends; `id` is the
-# slug routed through MultiProvider in main.py's startup.
+# slug routed by main.py's startup providers.
 #
 # Routing convention on `id`:
-#   - `groq:<model>`  → sent through the Groq client in main.lifespan
-#   - anything else   → sent through the OpenRouter client (default)
-# The `groq:` prefix is stripped before the slug hits Groq.
+#   - `vertex:<model>` → Vertex AI's OpenAI-compat endpoint (all models in-house)
+#   - anything else    → OpenRouter (currently only `openai/gpt-5`)
+# The prefix is stripped before the slug is handed to the downstream client.
 MODELS: dict[str, ModelEntry] = {
-    "gpt-oss-120b-free": {
-        "id": "groq:openai/gpt-oss-120b",
-        "label": "GPT-OSS 120B",
+    "gemini-2-5-flash-lite-free": {
+        "id": "vertex:google/gemini-2.5-flash-lite",
+        "label": "Gemini 2.5 Flash Lite",
         "tier": "free",
-        "description": "OpenAI open-weight 120B via Groq · free, fast, reliable",
+        "description": "Vertex AI · fastest, cheapest Gemini for the free tier",
     },
-    "nvidia-nemotron-pro": {
-        "id": "nvidia/nemotron-3-super-120b-a12b",
-        "label": "Nemotron 120B",
+    "gemini-2-5-pro": {
+        "id": "vertex:google/gemini-2.5-pro",
+        "label": "Gemini 2.5 Pro",
         "tier": "pro",
-        "description": "NVIDIA flagship open-weight via OpenRouter",
+        "description": "Vertex AI · 1M-context flagship for long cases",
     },
     "claude-opus-4-7": {
-        "id": "anthropic/claude-opus-4.7",
+        "id": "vertex:anthropic/claude-opus-4-7",
         "label": "Claude Opus 4.7",
         "tier": "pro",
-        "description": "Anthropic's most capable model",
+        "description": "Vertex AI · Anthropic flagship, strongest clinical reasoning",
+    },
+    "llama-3-3-70b": {
+        "id": "vertex:meta/llama-3.3-70b-instruct-maas",
+        "label": "Llama 3.3 70B",
+        "tier": "pro",
+        "description": "Vertex AI · Meta open-weight via managed endpoint",
     },
     "gpt-5": {
         "id": "openai/gpt-5",
         "label": "GPT-5",
         "tier": "pro",
-        "description": "OpenAI's flagship reasoning model",
-    },
-    "gemini-2-5-pro": {
-        "id": "google/gemini-2.5-pro",
-        "label": "Gemini 2.5 Pro",
-        "tier": "pro",
-        "description": "Google's flagship with 1M context",
-    },
-    "deepseek-r1": {
-        "id": "deepseek/deepseek-r1",
-        "label": "DeepSeek R1",
-        "tier": "pro",
-        "description": "Strong reasoning at lower cost",
+        "description": "OpenAI flagship · routed through OpenRouter (only out-of-house model)",
     },
 }
 
-DEFAULT_MODEL_KEY = "gpt-oss-120b-free"
+DEFAULT_MODEL_KEY = "gemini-2-5-flash-lite-free"
 
 # Back-compat alias so existing council.py agent definitions keep compiling
 # until we migrate them to accept a per-run model override.

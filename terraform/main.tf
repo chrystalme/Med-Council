@@ -144,6 +144,22 @@ resource "google_storage_bucket_iam_member" "run_sa_bucket" {
   member = "serviceAccount:${google_service_account.run_sa.email}"
 }
 
+# Vertex AI inference (all non-GPT-5 models route through here).
+resource "google_project_iam_member" "run_sa_vertex_user" {
+  project = var.project_id
+  role    = "roles/aiplatform.user"
+  member  = "serviceAccount:${google_service_account.run_sa.email}"
+}
+
+# Required Vertex APIs — aiplatform is the inference endpoint itself.
+resource "google_project_service" "vertex_services" {
+  for_each = toset([
+    "aiplatform.googleapis.com",
+  ])
+  service            = each.value
+  disable_on_destroy = false
+}
+
 # Secret accessor IAM is added per-secret in secrets.tf.
 
 # ── Cloud Run service ───────────────────────────────────────────────────────
@@ -213,6 +229,17 @@ resource "google_cloud_run_v2_service" "api" {
       env {
         name  = "SPEECH_PROVIDER"
         value = "gcloud"
+      }
+      # Vertex AI wiring — project + region are read by main.lifespan to
+      # spin up the OpenAI-compat Vertex client. Auth is via ADC (the runtime
+      # service account above, granted roles/aiplatform.user).
+      env {
+        name  = "VERTEX_PROJECT"
+        value = var.project_id
+      }
+      env {
+        name  = "VERTEX_LOCATION"
+        value = var.region
       }
       # Where to redirect GET / to. Without this the API's `/` returns a small
       # JSON landing page instead of the legacy static UI. On prod we point

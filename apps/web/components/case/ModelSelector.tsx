@@ -126,7 +126,7 @@ export function ModelSelector({
   );
 }
 
-export function useStoredModelKey(defaultKey: string = "nvidia-nemotron-free") {
+export function useStoredModelKey(defaultKey: string = "gemini-2-5-flash-lite-free") {
   const [key, setKey] = useState<string>(defaultKey);
   useEffect(() => {
     if (typeof window === "undefined") return;
