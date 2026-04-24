@@ -1,0 +1,17 @@
+__pycache__
+*.py[cod]
+.venv
+.python-version
+.env
+.env.*
+!.env.example
+feedback.db
+storage_data/
+.vercel/
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+.DS_Store
+docs/
+scripts/
+static/legacy/

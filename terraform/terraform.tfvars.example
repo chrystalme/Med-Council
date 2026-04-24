@@ -1,0 +1,15 @@
+project_id = "your-gcp-project-id"
+region     = "us-central1"
+
+# Required on every apply — deploy by bumping the tag.
+image_tag = "latest"
+
+# Optional overrides
+# service_name           = "medai-api"
+# db_tier                = "db-custom-1-3840"
+# min_instances          = 0
+# max_instances          = 10
+# cpu                    = "1"
+# memory                 = "1Gi"
+# request_timeout_seconds = 300
+# allow_unauthenticated  = true

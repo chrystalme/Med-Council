@@ -1,0 +1,93 @@
+name: Destroy (GCP)
+
+# Manual trigger. Runs `terraform destroy` against the GCP stack, gated on a
+# literal typed-confirmation input so it is very hard to fire by accident.
+# Cloud SQL has `deletion_protection = true` in main.tf, so the DB is preserved
+# even after this runs — flip the flag and re-apply if you need to drop it.
+#
+# All workflow inputs and github-context values are passed through `env:`
+# before being referenced in `run:` — no direct `${{ ... }}` interpolation
+# into shell commands, per GitHub Actions injection guidance.
+on:
+  workflow_dispatch:
+    inputs:
+      confirm:
+        description: 'Type exactly:  destroy medai api  to proceed.'
+        required: true
+      target:
+        description: 'Optional resource address to scope the destroy (e.g. google_cloud_run_v2_service.api). Leave blank to destroy the full stack.'
+        required: false
+        default: ''
+
+concurrency:
+  group: destroy-gcp
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  destroy:
+    name: Terraform destroy
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      REGION: ${{ vars.GCP_REGION }}
+      TF_STATE_BUCKET: ${{ vars.GCP_TF_STATE_BUCKET }}
+      CONFIRM: ${{ github.event.inputs.confirm }}
+      TARGET: ${{ github.event.inputs.target }}
+    steps:
+      - name: Verify confirmation phrase
+        run: |
+          if [ "$CONFIRM" != "destroy medai api" ]; then
+            echo "::error::Confirmation phrase does not match. Refusing to destroy."
+            exit 1
+          fi
+
+      - uses: actions/checkout@v4
+
+      - name: Auth to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SA }}
+          token_format: access_token
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.0
+
+      - name: Terraform init
+        working-directory: terraform
+        run: terraform init -backend-config="bucket=${TF_STATE_BUCKET}" -input=false
+
+      - name: Terraform destroy
+        working-directory: terraform
+        run: |
+          TARGET_ARG=""
+          if [ -n "$TARGET" ]; then
+            TARGET_ARG="-target=$TARGET"
+            echo "::notice::Scoped destroy: $TARGET"
+          else
+            echo "::notice::Full-stack destroy (Cloud SQL retained — deletion_protection=true)"
+          fi
+          terraform destroy -input=false -auto-approve \
+            -var="project_id=${PROJECT_ID}" \
+            -var="region=${REGION}" \
+            -var="image_tag=destroy" \
+            $TARGET_ARG
+
+      - name: Summary
+        run: |
+          {
+            echo "### Destroy complete"
+            if [ -n "$TARGET" ]; then
+              echo "- scope: \`$TARGET\`"
+            else
+              echo "- scope: full stack"
+            fi
+            echo "- Cloud SQL: preserved (deletion_protection=true in main.tf)."
+          } >> "$GITHUB_STEP_SUMMARY"

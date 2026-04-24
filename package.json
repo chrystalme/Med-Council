@@ -7,8 +7,11 @@
     "dev": "pnpm --filter web dev",
     "build": "pnpm --filter web build",
     "lint": "pnpm --filter web lint",
+    "typecheck": "pnpm --filter web exec tsc --noEmit",
+    "verify": "pnpm lint && pnpm typecheck && pnpm build",
     "api:install": "cd apps/api && uv sync",
-    "api:dev": "cd apps/api && uv run uvicorn main:app --reload --port 8000"
+    "api:dev": "cd apps/api && uv run uvicorn main:app --reload --port 8000",
+    "api:verify": "cd apps/api && uv run python -c 'import main; import auth; import council; print(\"import ok\")'"
   },
   "engines": {
     "node": ">=20",
