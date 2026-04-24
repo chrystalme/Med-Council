@@ -15,8 +15,14 @@ import urllib.request
 
 log = logging.getLogger("medai.escalation")
 
+# Terms the consensus agent's `urgency` field may carry that should page
+# on-call. The canonical outputs from `consensus_agent` in council.py are
+# "routine" | "urgent" | "emergent" — note the agent uses "emergent" (adj.),
+# not "emergency" (noun). Leaving the legacy synonyms (emergency/stat/immediate/
+# critical) so older consultations or hand-crafted consensus payloads still page.
 URGENT_VALUES = frozenset(
     {
+        "emergent",
         "emergency",
         "stat",
         "immediate",
@@ -40,10 +46,23 @@ def maybe_escalate_oncall(*, consensus: dict, symptoms: str) -> None:
     to = os.environ.get("ONCALL_DOCTOR_EMAIL", "").strip()
     from_addr = os.environ.get("RESEND_FROM_EMAIL", "").strip()
     if not key or not to or not from_addr:
+        log.info(
+            "escalation skipped — Resend not configured (key=%s to=%s from=%s)",
+            "set" if key else "missing",
+            "set" if to else "missing",
+            "set" if from_addr else "missing",
+        )
         return
 
     urg = _urgency_from_consensus(consensus)
     if urg not in URGENT_VALUES:
+        # Silent skips bit us once (the consensus agent emits "emergent",
+        # which wasn't in the allowlist). Log every non-match so the next
+        # vocabulary drift is visible in Cloud Logging rather than silent.
+        log.info(
+            "escalation skipped — urgency=%r not in URGENT_VALUES=%s",
+            urg, sorted(URGENT_VALUES),
+        )
         return
 
     subject = f"[MedAI Council] Escalation — {urg.upper()} urgency"
