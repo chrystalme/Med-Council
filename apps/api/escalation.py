@@ -17,20 +17,17 @@ log = logging.getLogger("medai.escalation")
 
 # Terms the consensus agent's `urgency` field may carry that should page
 # on-call. The canonical outputs from `consensus_agent` in council.py are
-# "routine" | "urgent" | "emergent". NOTE: including "routine" here means
-# EVERY consultation pages on-call — user-requested. Entries are matched
-# after `.strip().lower()`, so case variants of the same word are redundant
-# but kept per the original request as documentation.
+# "routine" | "urgent" | "emergent". "routine" is deliberately NOT in this
+# set — pages should only fire on elevated urgency. Entries are matched
+# after `.strip().lower()`.
 URGENT_VALUES = frozenset(
     {
-        "routine",
         "emergent",
         "emergency",
         "stat",
         "immediate",
         "critical",
         "urgent",
-        "Urgent",  # covered by lower-casing; listed to match the config request
     }
 )
 
