@@ -26,10 +26,10 @@ function formatCouncilError(e: unknown, stageLabel: string): string {
         ' Pick another model from the selector at the top of the page and click the stage again.'
       );
     }
-    if (code === 'groq_not_configured') {
+    if (code === 'vertex_not_configured' || code === 'groq_not_configured') {
       return (
         message ??
-        'Free-tier model is unavailable (server misconfigured). Pick a Pro model or try again later.'
+        'In-house model provider is unavailable (server misconfigured). Pick a Pro model or try again later.'
       );
     }
     if (code === 'provider_unavailable') {
@@ -138,7 +138,7 @@ export function CaseWorkspace() {
 
   const [step, setStep] = useState(0);
   const [maxStep, setMaxStep] = useState(0);
-  const [modelKey, setModelKey] = useStoredModelKey('nvidia-nemotron-free');
+  const [modelKey, setModelKey] = useStoredModelKey('gemini-2-5-flash-lite-free');
   const [caseId, setCaseId] = useState<string | null>(null);
   const [consultationSaveError, setConsultationSaveError] = useState<string | null>(null);
   const consultationSavedRef = useRef<string | null>(null);

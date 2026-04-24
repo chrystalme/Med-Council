@@ -90,17 +90,17 @@ from council import (
 from council_registry import DEFAULT_MODEL_KEY, models_for_plan, resolve_model
 
 # Two model providers wired side-by-side:
-#   • `_council_model_provider` — OpenRouter (Claude, Gemini, DeepSeek, Nemotron, …)
-#   • `_groq_model_provider`    — Groq (GPT-OSS-120B, default free tier)
-# Registry slugs prefixed with `groq:` route to the Groq client in run_agent_raw.
+#   • `_vertex_model_provider`  — Vertex AI (default; all in-house models)
+#   • `_council_model_provider` — OpenRouter (only `openai/gpt-5` today)
+# Registry slugs prefixed with `vertex:` route to the Vertex client.
 _council_model_provider: MultiProvider | None = None
-# For Groq we use a minimal passthrough provider (defined below) instead of
-# MultiProvider, because MultiProvider interprets `openai/` in slugs like
-# `openai/gpt-oss-120b` as a routing prefix and strips it — Groq would then
-# receive a bare `gpt-oss-120b` and 404. The passthrough keeps the full slug.
-_groq_model_provider = None  # type: ignore[var-annotated]
+# MultiProvider interprets `openai/…` / `anthropic/…` prefixes as routing hints
+# and strips them, which breaks OpenAI-compatible endpoints that expect the
+# full slug intact (Vertex AI's OpenAI-compat endpoint, Groq, Together, …).
+# The passthrough provider below keeps the slug verbatim.
+_vertex_model_provider = None  # type: ignore[var-annotated]
 
-_GROQ_ROUTING_PREFIX = "groq:"
+_VERTEX_ROUTING_PREFIX = "vertex:"
 
 
 class _DirectOpenAICompatibleProvider:
@@ -225,7 +225,7 @@ async def lifespan(app: FastAPI):
     if not openai_key:
         raise RuntimeError("OPENAI_API_KEY is not set (used for tracing only).")
 
-    global _council_model_provider, _groq_model_provider
+    global _council_model_provider, _vertex_model_provider
 
     # Point the OpenAI Agents SDK default OpenAI client at OpenRouter (chat completions).
     openrouter_client = AsyncOpenAI(
@@ -245,27 +245,67 @@ async def lifespan(app: FastAPI):
         unknown_prefix_mode="model_id",
     )
 
-    # Groq: serves the free-tier default (GPT-OSS-120B). Optional — if GROQ_API_KEY
-    # isn't set, free users see a clear 503 pointing them at the env var.
-    groq_key = os.environ.get("GROQ_API_KEY")
-    if groq_key:
-        groq_client = AsyncOpenAI(
-            api_key=groq_key,
-            base_url="https://api.groq.com/openai/v1",
-        )
-        # Passthrough provider — MultiProvider would rewrite `openai/...` slugs.
-        _groq_model_provider = _DirectOpenAICompatibleProvider(
-            groq_client, default_model="openai/gpt-oss-120b"
-        )
+    # Vertex AI: serves every in-house model — the free-tier default
+    # (gemini-2.5-flash-lite) and the Pro-tier Gemini / Claude / Llama entries.
+    # Auth: ADC on Cloud Run (via the runtime SA with roles/aiplatform.user) or
+    # `gcloud auth application-default login` locally. No static API key.
+    vertex_project = (
+        os.environ.get("VERTEX_PROJECT")
+        or os.environ.get("GCP_PROJECT")
+        or os.environ.get("GOOGLE_CLOUD_PROJECT")
+    )
+    vertex_location = os.environ.get("VERTEX_LOCATION", "us-central1")
+    if vertex_project:
+        try:
+            import google.auth
+            from google.auth.transport.requests import Request as _GRequest
+            import httpx
+
+            creds, _ = google.auth.default(
+                scopes=["https://www.googleapis.com/auth/cloud-platform"]
+            )
+
+            class _VertexTokenAuth(httpx.Auth):
+                """Refreshes the ADC token on every request; credentials are
+                thread-safe and refresh lazily when `creds.valid` flips false."""
+
+                def auth_flow(self, request):
+                    if not creds.valid:
+                        creds.refresh(_GRequest())
+                    request.headers["Authorization"] = f"Bearer {creds.token}"
+                    yield request
+
+            vertex_http = httpx.AsyncClient(auth=_VertexTokenAuth())
+            vertex_base = (
+                f"https://{vertex_location}-aiplatform.googleapis.com/v1/"
+                f"projects/{vertex_project}/locations/{vertex_location}/"
+                f"endpoints/openapi"
+            )
+            vertex_client = AsyncOpenAI(
+                api_key="UNUSED",  # real auth is via _VertexTokenAuth on the httpx client
+                base_url=vertex_base,
+                http_client=vertex_http,
+            )
+            _vertex_model_provider = _DirectOpenAICompatibleProvider(
+                vertex_client, default_model="google/gemini-2.5-flash-lite"
+            )
+        except Exception as exc:
+            log.warning(
+                "Vertex AI client failed to initialise (%s) — free-tier model will "
+                "return provider_unavailable until the runtime SA has "
+                "roles/aiplatform.user and the aiplatform.googleapis.com API is enabled.",
+                exc,
+            )
     else:
         log.warning(
-            "GROQ_API_KEY is not set — the free-tier model (gpt-oss-120b) will "
-            "return a provider_unavailable error until the key is added."
+            "VERTEX_PROJECT / GCP_PROJECT / GOOGLE_CLOUD_PROJECT is not set — "
+            "Vertex AI calls will return provider_unavailable. Set it on the container."
         )
 
     _run_migrations()
 
-    print("✓ Inference  → OpenRouter  (nvidia/nemotron-3-super-120b-a12b:free)")
+    default_label = f"vertex:{_vertex_model_provider._default_model}" if _vertex_model_provider else "none"
+    print(f"✓ Inference  → Vertex AI  ({default_label}) + OpenRouter (gpt-5 only)")
     print("✓ Tracing    → platform.openai.com/traces  (OpenAI Agents SDK exporter)")
     print(f"✓ Database   → {_db.get_driver()}  (view feedback: /feedback/{FEEDBACK_SECRET})")
     if auth_configured():
@@ -401,34 +441,34 @@ def _resolve_runtime_model(agent: Agent, model: str | None):
     RunConfig accepts a concrete Model instance and uses it directly.
     """
     effective = model if model else getattr(agent, "model", None)
-    if isinstance(effective, str) and effective.startswith(_GROQ_ROUTING_PREFIX):
-        clean = effective[len(_GROQ_ROUTING_PREFIX):]
-        if _groq_model_provider is None:
+    if isinstance(effective, str) and effective.startswith(_VERTEX_ROUTING_PREFIX):
+        clean = effective[len(_VERTEX_ROUTING_PREFIX):]
+        if _vertex_model_provider is None:
             raise HTTPException(
                 status_code=503,
                 detail={
-                    "code": "groq_not_configured",
+                    "code": "vertex_not_configured",
                     "message": (
-                        "Free-tier model requested but GROQ_API_KEY is not set "
-                        "on the API container. Add it to apps/api/.env (or the "
-                        "deployment's secret store) and restart."
+                        "Vertex AI is not wired on this container. Ensure VERTEX_PROJECT "
+                        "is set and the runtime service account has roles/aiplatform.user, "
+                        "then restart. See terraform/main.tf for the IAM binding."
                     ),
                 },
             )
         # Return a pre-bound Model instance — Runner uses it without any further
-        # provider routing, so the `groq:` slug never reaches OpenRouter.
-        model_instance = _groq_model_provider.get_model(clean)
-        return _groq_model_provider, model_instance
+        # provider routing, so the `vertex:` slug never leaks to another client.
+        model_instance = _vertex_model_provider.get_model(clean)
+        return _vertex_model_provider, model_instance
     return _council_model_provider or MultiProvider(), effective if isinstance(effective, str) else None
 
 
 async def run_agent_raw(agent: Agent, prompt: str, *, model: str | None = None) -> Any:
     """Run an agent and return `final_output`.
 
-    Routes between OpenRouter and Groq based on the slug's `groq:` prefix, then
-    wraps the Runner in a retry loop for transient provider errors — Cloudflare
-    524 origin timeouts, empty-choices responses, 5xx upstream failures, and
-    rate-limit backpressure.
+    Routes between Vertex (in-house) and OpenRouter (GPT-5 only) based on the
+    slug's `vertex:` prefix, then wraps the Runner in a retry loop for
+    transient provider errors — Cloudflare 524 origin timeouts, empty-choices
+    responses, 5xx upstream failures, and rate-limit backpressure.
     """
     provider, clean_model = _resolve_runtime_model(agent, model)
     rc = RunConfig(
