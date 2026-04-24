@@ -14,6 +14,7 @@ __pycache__/
 # ─── Local-only artefacts ────────────────────────────────────────
 feedback.db
 apps/api/feedback.db
+.claude/
 
 # ─── Deployment caches ───────────────────────────────────────────
 .vercel/
