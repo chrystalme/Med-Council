@@ -1,18 +1,18 @@
 """
 Case attachment storage + text extraction.
 
-Local: SQLite BLOB column in the feedback.db `case_attachments` table.
-Prod (GCS): stub — would store blob bytes in Cloud Storage and keep metadata +
-extracted text in Postgres (or same sqlite on Cloud Run with a volume).
+Default: **Postgres** — blobs live in a `bytea` column of `case_attachments`,
+with extracted text and metadata alongside. Fine at this stage; for production
+we'll move blobs to GCS via `storage.get_storage()` and keep only the metadata
+row in Postgres (see `GcsAttachmentStore` stub).
 
-Swap via env var: ATTACHMENT_STORE=sqlite|gcs.
+Switch via `ATTACHMENT_STORE=postgres|gcs`. Default: postgres.
 """
 
 from __future__ import annotations
 
 import logging
 import os
-import sqlite3
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -82,7 +82,6 @@ def extract_text(blob: bytes, mime_type: str, filename: str) -> str:
             return f"[PDF attached: {filename} — text extraction failed]"
 
     if mime_type in IMAGE_MIMES or mime_type.startswith("image/"):
-        # V1: no OCR. Record a note so the agent knows a file was attached.
         return f"[Image attached: {filename} — OCR not yet available; patient should describe if relevant]"
 
     return f"[File attached: {filename} (type {mime_type})]"
@@ -99,10 +98,10 @@ def is_mime_supported(mime_type: str) -> bool:
 
 
 class AttachmentStore(Protocol):
-    def ensure_schema(self, con: sqlite3.Connection) -> None: ...
+    def ensure_schema(self, con) -> None: ...
     def save(
         self,
-        con: sqlite3.Connection,
+        con,
         *,
         case_id: str,
         user_id: str,
@@ -114,13 +113,13 @@ class AttachmentStore(Protocol):
         text: str,
         question_index: int | None,
     ) -> AttachmentRow: ...
-    def list_for_case(self, con: sqlite3.Connection, case_id: str) -> list[AttachmentRow]: ...
-    def get_texts_for_case(self, con: sqlite3.Connection, case_id: str) -> list[AttachmentRow]: ...
-    def delete(self, con: sqlite3.Connection, attachment_id: str, user_id: str) -> bool: ...
+    def list_for_case(self, con, case_id: str) -> list[AttachmentRow]: ...
+    def get_texts_for_case(self, con, case_id: str) -> list[AttachmentRow]: ...
+    def delete(self, con, attachment_id: str, user_id: str) -> bool: ...
 
 
-class SqliteAttachmentStore:
-    def ensure_schema(self, con: sqlite3.Connection) -> None:
+class PostgresAttachmentStore:
+    def ensure_schema(self, con) -> None:
         con.execute(
             """
             CREATE TABLE IF NOT EXISTS case_attachments (
@@ -130,11 +129,11 @@ class SqliteAttachmentStore:
                 kind           TEXT NOT NULL,
                 filename       TEXT,
                 mime_type      TEXT,
-                blob           BLOB,
+                blob           BYTEA,
                 text           TEXT NOT NULL DEFAULT '',
                 size_bytes     INTEGER NOT NULL DEFAULT 0,
                 question_index INTEGER,
-                created_at     TEXT NOT NULL
+                created_at     TIMESTAMPTZ NOT NULL DEFAULT NOW()
             )
             """
         )
@@ -143,16 +142,16 @@ class SqliteAttachmentStore:
         )
         con.commit()
 
-    def _count_for_case(self, con: sqlite3.Connection, case_id: str) -> int:
+    def _count_for_case(self, con, case_id: str) -> int:
         row = con.execute(
-            "SELECT COUNT(*) AS n FROM case_attachments WHERE case_id = ?",
+            "SELECT COUNT(*) AS n FROM case_attachments WHERE case_id = %s",
             (case_id,),
         ).fetchone()
-        return int(row[0]) if row else 0
+        return int(row["n"]) if row else 0
 
     def save(
         self,
-        con: sqlite3.Connection,
+        con,
         *,
         case_id: str,
         user_id: str,
@@ -195,7 +194,7 @@ class SqliteAttachmentStore:
             """
             INSERT INTO case_attachments
               (id, case_id, user_id, kind, filename, mime_type, blob, text, size_bytes, question_index, created_at)
-            VALUES (?,?,?,?,?,?,?,?,?,?,?)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """,
             (
                 attachment_id,
@@ -226,12 +225,12 @@ class SqliteAttachmentStore:
             created_at=now,
         )
 
-    def list_for_case(self, con: sqlite3.Connection, case_id: str) -> list[AttachmentRow]:
+    def list_for_case(self, con, case_id: str) -> list[AttachmentRow]:
         rows = con.execute(
             """
             SELECT id, case_id, user_id, kind, filename, mime_type, text, size_bytes, question_index, created_at
             FROM case_attachments
-            WHERE case_id = ?
+            WHERE case_id = %s
             ORDER BY created_at ASC
             """,
             (case_id,),
@@ -247,30 +246,34 @@ class SqliteAttachmentStore:
                 text=r["text"] or "",
                 size_bytes=int(r["size_bytes"] or 0),
                 question_index=r["question_index"],
-                created_at=r["created_at"],
+                created_at=(
+                    r["created_at"].isoformat()
+                    if hasattr(r["created_at"], "isoformat")
+                    else str(r["created_at"] or "")
+                ),
             )
             for r in rows
         ]
 
-    def get_texts_for_case(self, con: sqlite3.Connection, case_id: str) -> list[AttachmentRow]:
+    def get_texts_for_case(self, con, case_id: str) -> list[AttachmentRow]:
         """Alias of list_for_case for semantic clarity at call sites that want the text payload."""
         return self.list_for_case(con, case_id)
 
-    def delete(self, con: sqlite3.Connection, attachment_id: str, user_id: str) -> bool:
+    def delete(self, con, attachment_id: str, user_id: str) -> bool:
         cur = con.execute(
-            "DELETE FROM case_attachments WHERE id = ? AND user_id = ?",
+            "DELETE FROM case_attachments WHERE id = %s AND user_id = %s",
             (attachment_id, user_id),
         )
         con.commit()
-        return cur.rowcount > 0
+        return (cur.rowcount or 0) > 0
 
 
 class GcsAttachmentStore:
     """Stub — implement on GCP migration.
 
-    Plan: store blob bytes in a GCS bucket keyed by `attachments/{user_id}/{id}`;
-    persist metadata + extracted text in the primary DB (Cloud SQL / sqlite /
-    Firestore depending on overall DB choice at migration time).
+    Plan: store blob bytes via `storage.get_storage()` keyed by
+    `attachments/{user_id}/{id}`; persist metadata + extracted text in Postgres
+    (`case_attachments` without the `blob` column, or with `blob` NULL).
     """
 
     def ensure_schema(self, *args, **kwargs) -> None:
@@ -296,11 +299,11 @@ def get_attachment_store() -> AttachmentStore:
     global _store
     if _store is not None:
         return _store
-    backend = (os.environ.get("ATTACHMENT_STORE") or "sqlite").lower()
+    backend = (os.environ.get("ATTACHMENT_STORE") or "postgres").lower()
     if backend == "gcs":
         _store = GcsAttachmentStore()
     else:
-        _store = SqliteAttachmentStore()
+        _store = PostgresAttachmentStore()
     return _store
 
 

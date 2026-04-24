@@ -15,13 +15,24 @@ class ModelEntry(TypedDict):
 
 
 # Curated allowlist. Keys are stable identifiers the frontend sends; `id` is the
-# OpenRouter slug routed through MultiProvider in main.py's startup.
+# slug routed through MultiProvider in main.py's startup.
+#
+# Routing convention on `id`:
+#   - `groq:<model>`  → sent through the Groq client in main.lifespan
+#   - anything else   → sent through the OpenRouter client (default)
+# The `groq:` prefix is stripped before the slug hits Groq.
 MODELS: dict[str, ModelEntry] = {
-    "nvidia-nemotron-free": {
-        "id": "nvidia/nemotron-3-super-120b-a12b:free",
-        "label": "Nemotron 120B",
+    "gpt-oss-120b-free": {
+        "id": "groq:openai/gpt-oss-120b",
+        "label": "GPT-OSS 120B",
         "tier": "free",
-        "description": "NVIDIA flagship open-weight · free tier",
+        "description": "OpenAI open-weight 120B via Groq · free, fast, reliable",
+    },
+    "nvidia-nemotron-pro": {
+        "id": "nvidia/nemotron-3-super-120b-a12b",
+        "label": "Nemotron 120B",
+        "tier": "pro",
+        "description": "NVIDIA flagship open-weight via OpenRouter",
     },
     "claude-opus-4-7": {
         "id": "anthropic/claude-opus-4.7",
@@ -49,7 +60,7 @@ MODELS: dict[str, ModelEntry] = {
     },
 }
 
-DEFAULT_MODEL_KEY = "nvidia-nemotron-free"
+DEFAULT_MODEL_KEY = "gpt-oss-120b-free"
 
 # Back-compat alias so existing council.py agent definitions keep compiling
 # until we migrate them to accept a per-run model override.

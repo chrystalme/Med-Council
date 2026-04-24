@@ -13,4 +13,16 @@ dependencies = [
     "pypdf>=6.10.2",
     "python-multipart>=0.0.26",
     "numpy>=2.4.4",
+    # Postgres driver for local dev + Cloud SQL (deployed).
+    "psycopg[binary,pool]>=3.2.0",
+    # pgvector adapter — registers the `vector` type so lists/np arrays marshal over the wire.
+    "pgvector>=0.3.6",
+    # Schema migrations — generate initial migration with `alembic revision --autogenerate`.
+    "alembic>=1.13.0",
+    "SQLAlchemy>=2.0.0",
+    # Cloud Storage for attachments when deployed. Local dev falls back to the filesystem.
+    "google-cloud-storage>=2.18.0",
+    # Speech provider for GCP deploy (SPEECH_PROVIDER=gcloud). Swap out when cost matters.
+    "google-cloud-speech>=2.27.0",
+    "google-cloud-texttospeech>=2.21.0",
 ]

@@ -10,7 +10,9 @@ Environment variables required:
 Run locally:
     uvicorn main:app --reload --port 8000
 
-Deploy (Vercel): root `app.py` re-exports this module; UI is served from `static/index.html` via GET `/` so HTML and API share one ASGI app (avoids CDN vs function routing issues).
+Deploy target: GCP Cloud Run. Persistent state lives in Postgres (local dev:
+your local Postgres; prod: Cloud SQL). Blob/file storage is abstracted in
+`storage.py` — local filesystem in dev, GCS bucket when deployed.
 """
 
 from __future__ import annotations
@@ -21,7 +23,6 @@ import logging
 import os
 import re
 import secrets
-import sqlite3
 import uuid
 
 log = logging.getLogger("medai.api")
@@ -88,92 +89,71 @@ from council import (
 )
 from council_registry import DEFAULT_MODEL_KEY, models_for_plan, resolve_model
 
-# OpenRouter models like nvidia/... use an unknown MultiProvider prefix — pass full ID to the client.
+# Two model providers wired side-by-side:
+#   • `_council_model_provider` — OpenRouter (Claude, Gemini, DeepSeek, Nemotron, …)
+#   • `_groq_model_provider`    — Groq (GPT-OSS-120B, default free tier)
+# Registry slugs prefixed with `groq:` route to the Groq client in run_agent_raw.
 _council_model_provider: MultiProvider | None = None
+# For Groq we use a minimal passthrough provider (defined below) instead of
+# MultiProvider, because MultiProvider interprets `openai/` in slugs like
+# `openai/gpt-oss-120b` as a routing prefix and strips it — Groq would then
+# receive a bare `gpt-oss-120b` and 404. The passthrough keeps the full slug.
+_groq_model_provider = None  # type: ignore[var-annotated]
 
-# ── Feedback persistence (SQLite) ────────────────────────────────────────────
-# Vercel's filesystem is read-only except /tmp; locally, use the project dir.
-_ON_VERCEL = bool(os.environ.get("VERCEL"))
-_DB_PATH = Path("/tmp/feedback.db") if _ON_VERCEL else Path(__file__).resolve().parent / "feedback.db"
+_GROQ_ROUTING_PREFIX = "groq:"
+
+
+class _DirectOpenAICompatibleProvider:
+    """Minimal ModelProvider that sends the slug to the client verbatim.
+
+    MultiProvider tries to be clever about `openai/…` / `anthropic/…` slugs,
+    which breaks OpenAI-compatible endpoints (Groq, Together, …) that expect
+    the full slug intact. This provider always instantiates
+    `OpenAIChatCompletionsModel(model=slug, openai_client=client)` — no parsing.
+    """
+
+    def __init__(self, client, *, default_model: str):
+        from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
+
+        self._client = client
+        self._default_model = default_model
+        self._ModelClass = OpenAIChatCompletionsModel
+
+    def get_model(self, model_name):
+        name = model_name or self._default_model
+        return self._ModelClass(model=name, openai_client=self._client)
+
+# ── Persistence (Postgres via db.py; schema owned by Alembic) ────────────────
+import db as _db
+
 FEEDBACK_SECRET = os.environ.get("FEEDBACK_SECRET") or os.environ.get("FEEDBACK_TOKEN") or secrets.token_urlsafe(32)
 
 
-def _init_feedback_db() -> None:
-    """Create the feedback table if it doesn't already exist."""
-    con = sqlite3.connect(str(_DB_PATH))
-    con.execute(
-        """CREATE TABLE IF NOT EXISTS feedback (
-               id         INTEGER PRIMARY KEY AUTOINCREMENT,
-               rating     TEXT    NOT NULL CHECK(rating IN ('up','down')),
-               comment    TEXT    NOT NULL DEFAULT '',
-               symptoms   TEXT    NOT NULL DEFAULT '',
-               diagnosis  TEXT    NOT NULL DEFAULT '',
-               created_at TEXT    NOT NULL
-           )"""
-    )
-    con.commit()
-    con.close()
+def _run_migrations() -> None:
+    """Run pending Alembic migrations against `DATABASE_URL`.
 
-
-def _init_cases_db() -> None:
-    """Step 3 — persisted case drafts (SQLite, same file as feedback).
-
-    Also initialises the patient memory schema (consultations + vector embeddings)
-    and the case attachments schema (Phase 3.5). All share feedback.db.
+    Safe for single-instance startup. For multi-instance Cloud Run deploys, run
+    this as a separate Cloud Run Job before rolling the service — two instances
+    starting simultaneously can race on `alembic_version`. Skipped entirely for
+    the SQLite legacy fallback because Alembic targets Postgres only.
     """
-    con = sqlite3.connect(str(_DB_PATH))
-    con.execute(
-        """CREATE TABLE IF NOT EXISTS cases (
-               id         TEXT PRIMARY KEY,
-               user_id    TEXT NOT NULL DEFAULT '',
-               title      TEXT NOT NULL DEFAULT '',
-               state      TEXT NOT NULL DEFAULT '{}',
-               created_at TEXT NOT NULL,
-               updated_at TEXT NOT NULL
-           )"""
-    )
-    con.execute(
-        """CREATE TABLE IF NOT EXISTS consultations (
-               id           TEXT PRIMARY KEY,
-               user_id      TEXT NOT NULL,
-               case_id      TEXT NOT NULL,
-               summary      TEXT NOT NULL,
-               primary_dx   TEXT,
-               icd_code     TEXT,
-               urgency      TEXT,
-               confidence   INTEGER,
-               created_at   TEXT NOT NULL
-           )"""
-    )
-    con.execute(
-        "CREATE INDEX IF NOT EXISTS idx_consultations_user ON consultations(user_id)"
-    )
-    con.commit()
+    if _db.get_driver() != "postgres":
+        log.warning("Skipping migrations — DATABASE_URL is not Postgres.")
+        return
+    if os.environ.get("SKIP_MIGRATIONS") == "1":
+        log.info("SKIP_MIGRATIONS=1 — leaving schema untouched.")
+        return
+    from alembic import command
+    from alembic.config import Config as AlembicConfig
 
-    # Vector embeddings table (used by SqliteVectorStore for patient memory).
-    from vector_store import get_vector_store
-
-    try:
-        get_vector_store().ensure_schema(con)
-    except NotImplementedError:
-        # Vertex backend — schema lives elsewhere.
-        pass
-
-    # Attachments table (Phase 3.5).
-    from attachments import get_attachment_store
-
-    try:
-        get_attachment_store().ensure_schema(con)
-    except NotImplementedError:
-        pass
-
-    con.close()
+    cfg = AlembicConfig(str(Path(__file__).resolve().parent / "alembic.ini"))
+    cfg.set_main_option("script_location", str(Path(__file__).resolve().parent / "alembic"))
+    command.upgrade(cfg, "head")
 
 
-def _get_db() -> sqlite3.Connection:
-    con = sqlite3.connect(str(_DB_PATH))
-    con.row_factory = sqlite3.Row
-    return con
+def _get_db():
+    """Open a new DB connection using the driver selected by `DATABASE_URL`."""
+    return _db.connect()
 
 
 def _truncate(text: str, max_len: int = 120) -> str:
@@ -245,7 +225,7 @@ async def lifespan(app: FastAPI):
     if not openai_key:
         raise RuntimeError("OPENAI_API_KEY is not set (used for tracing only).")
 
-    global _council_model_provider
+    global _council_model_provider, _groq_model_provider
 
     # Point the OpenAI Agents SDK default OpenAI client at OpenRouter (chat completions).
     openrouter_client = AsyncOpenAI(
@@ -265,12 +245,29 @@ async def lifespan(app: FastAPI):
         unknown_prefix_mode="model_id",
     )
 
-    _init_feedback_db()
-    _init_cases_db()
+    # Groq: serves the free-tier default (GPT-OSS-120B). Optional — if GROQ_API_KEY
+    # isn't set, free users see a clear 503 pointing them at the env var.
+    groq_key = os.environ.get("GROQ_API_KEY")
+    if groq_key:
+        groq_client = AsyncOpenAI(
+            api_key=groq_key,
+            base_url="https://api.groq.com/openai/v1",
+        )
+        # Passthrough provider — MultiProvider would rewrite `openai/...` slugs.
+        _groq_model_provider = _DirectOpenAICompatibleProvider(
+            groq_client, default_model="openai/gpt-oss-120b"
+        )
+    else:
+        log.warning(
+            "GROQ_API_KEY is not set — the free-tier model (gpt-oss-120b) will "
+            "return a provider_unavailable error until the key is added."
+        )
+
+    _run_migrations()
 
     print("✓ Inference  → OpenRouter  (nvidia/nemotron-3-super-120b-a12b:free)")
     print("✓ Tracing    → platform.openai.com/traces  (OpenAI Agents SDK exporter)")
-    print(f"✓ Feedback   → {_DB_PATH}  (view: /feedback/{FEEDBACK_SECRET})")
+    print(f"✓ Database   → {_db.get_driver()}  (view feedback: /feedback/{FEEDBACK_SECRET})")
     if auth_configured():
         print("✓ Auth       → Clerk JWT verification enabled (CLERK_ISSUER set)")
     else:
@@ -292,12 +289,50 @@ app = FastAPI(
 
 _UI_INDEX = Path(__file__).resolve().parent / "static" / "index.html"
 
+def _allowed_origins() -> list[str]:
+    """Comma-separated origin list from ALLOWED_ORIGINS. Defaults to `*` for dev.
+
+    Production should set this to the frontend origin(s), e.g.
+    ``ALLOWED_ORIGINS=https://council.example.com,https://staging.council.example.com``.
+    When the web container reverse-proxies `/api/*` (Next.js rewrites), the
+    browser only ever sees same-origin requests and this list is a defence-in-depth.
+    """
+    raw = os.environ.get("ALLOWED_ORIGINS", "*").strip()
+    if raw == "*" or not raw:
+        return ["*"]
+    return [o.strip() for o in raw.split(",") if o.strip()]
+
+
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
-    allow_methods=["*"],
-    allow_headers=["*"],
+    allow_origins=_allowed_origins(),
+    allow_credentials=False,
+    allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
+    allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
 )
+
+
+@app.exception_handler(Exception)
+async def _unhandled_exception_handler(request: Request, exc: Exception):
+    """Last-resort handler so the frontend sees *what* broke instead of a bare 500.
+
+    Logs the full traceback server-side and returns a structured JSON body the
+    web app's `CouncilApiError` parser can surface in the Fault banner. Only
+    catches *unhandled* exceptions — HTTPException still follows its own path.
+    """
+    from fastapi.responses import JSONResponse
+
+    log.exception("Unhandled exception on %s %s", request.method, request.url.path)
+    return JSONResponse(
+        status_code=500,
+        content={
+            "detail": {
+                "code": "internal_error",
+                "message": f"{type(exc).__name__}: {str(exc)[:300]}",
+                "path": request.url.path,
+            }
+        },
+    )
 
 
 @app.middleware("http")
@@ -311,21 +346,104 @@ async def _rate_limit_middleware(request: Request, call_next):
 #  Helpers
 # ─────────────────────────────────────────────────────────────────────────────
 
+_TRANSIENT_PROVIDER_MARKERS = (
+    "524",                 # Cloudflare origin timeout (common on free OpenRouter models)
+    "502",                 # Bad gateway
+    "503",                 # Service unavailable
+    "504",                 # Gateway timeout
+    "provider returned error",
+    "no choices",
+    "upstream",
+    "timeout",
+    "timed out",
+    "rate limit",
+    "overloaded",
+    "try again",
+)
+
+
+def _is_transient_provider_error(exc: BaseException) -> bool:
+    """Detect OpenRouter/provider hiccups that are worth retrying."""
+    msg = (str(exc) or "").lower()
+    if any(marker in msg for marker in _TRANSIENT_PROVIDER_MARKERS):
+        return True
+    status = getattr(exc, "status_code", None) or getattr(exc, "http_status", None)
+    return status in {502, 503, 504, 524, 429}
+
+
+def _resolve_runtime_model(agent: Agent, model: str | None):
+    """Pick the provider (Groq vs OpenRouter) and clean model slug for this run.
+
+    The `groq:` routing prefix on a slug steers the call to the Groq client.
+    Everything else stays on OpenRouter. Falls through to the agent's bound
+    model if no per-run override is supplied.
+    """
+    effective = model if model else getattr(agent, "model", None)
+    if isinstance(effective, str) and effective.startswith(_GROQ_ROUTING_PREFIX):
+        clean = effective[len(_GROQ_ROUTING_PREFIX):]
+        if _groq_model_provider is None:
+            raise HTTPException(
+                status_code=503,
+                detail={
+                    "code": "groq_not_configured",
+                    "message": (
+                        "Free-tier model requested but GROQ_API_KEY is not set "
+                        "on the API container. Add it to apps/api/.env (or the "
+                        "deployment's secret store) and restart."
+                    ),
+                },
+            )
+        return _groq_model_provider, clean
+    return _council_model_provider or MultiProvider(), effective if isinstance(effective, str) else None
+
+
 async def run_agent_raw(agent: Agent, prompt: str, *, model: str | None = None) -> Any:
     """Run an agent and return `final_output`.
 
-    If `model` is provided (an OpenRouter model slug already resolved via
-    `resolve_model`), it overrides the agent's bound model for this run. The
-    MultiProvider with `unknown_prefix_mode="model_id"` accepts arbitrary
-    slugs, so per-call overrides work without re-instantiating the agent.
+    Routes between OpenRouter and Groq based on the slug's `groq:` prefix, then
+    wraps the Runner in a retry loop for transient provider errors — Cloudflare
+    524 origin timeouts, empty-choices responses, 5xx upstream failures, and
+    rate-limit backpressure.
     """
+    provider, clean_model = _resolve_runtime_model(agent, model)
     rc = RunConfig(
-        model_provider=_council_model_provider or MultiProvider(),
-        model=model,  # None falls through to agent.model
+        model_provider=provider,
+        model=clean_model,  # None falls through to agent.model inside Runner
         trace_include_sensitive_data=True,
     )
-    result = await Runner.run(agent, prompt, run_config=rc)
-    return result.final_output
+
+    max_attempts = 3
+    last_exc: BaseException | None = None
+    for attempt in range(1, max_attempts + 1):
+        try:
+            result = await Runner.run(agent, prompt, run_config=rc)
+            return result.final_output
+        except Exception as exc:
+            last_exc = exc
+            if not _is_transient_provider_error(exc) or attempt == max_attempts:
+                break
+            delay = 1.5 * (2 ** (attempt - 1))  # 1.5s → 3s → 6s
+            log.warning(
+                "Transient provider error on attempt %d/%d (%s); retrying in %.1fs",
+                attempt, max_attempts, exc, delay,
+            )
+            await asyncio.sleep(delay)
+
+    # All retries exhausted. Surface as a structured 503 the UI can present nicely.
+    assert last_exc is not None
+    if _is_transient_provider_error(last_exc):
+        raise HTTPException(
+            status_code=503,
+            detail={
+                "code": "provider_unavailable",
+                "message": (
+                    "The model provider is temporarily unavailable "
+                    f"({type(last_exc).__name__}). This usually clears in a few seconds "
+                    "— try again, or switch to a different model."
+                ),
+            },
+        ) from last_exc
+    raise last_exc
 
 
 async def run_agent(agent: Agent, prompt: str, *, model: str | None = None) -> str:
@@ -578,7 +696,7 @@ class PatientFollowUpIn(_ModeledRequest):
 
 @app.get("/")
 async def serve_ui():
-    """Single-page UI (Vercel: same function as API — avoids static `public/` taking precedence)."""
+    """Single-page UI served from the same ASGI app so HTML and API share one origin."""
     if _UI_INDEX.is_file():
         return FileResponse(_UI_INDEX, media_type="text/html; charset=utf-8")
     raise HTTPException(status_code=404, detail="UI not found (missing static/index.html)")
@@ -663,7 +781,7 @@ async def cases_create(req: CaseCreateIn, user: Optional[AuthUser] = Depends(cur
     now = _utc_now()
     con = _get_db()
     con.execute(
-        "INSERT INTO cases (id, user_id, title, state, created_at, updated_at) VALUES (?,?,?,?,?,?)",
+        "INSERT INTO cases (id, user_id, title, state, created_at, updated_at) VALUES (%s,%s,%s,%s,%s,%s)",
         (cid, uid, req.title or "Untitled case", "{}", now, now),
     )
     con.commit()
@@ -676,7 +794,7 @@ def cases_list(user: Optional[AuthUser] = Depends(current_user_maybe_required)):
     uid = _cases_user_id(user)
     con = _get_db()
     rows = con.execute(
-        "SELECT id, title, updated_at FROM cases WHERE user_id = ? ORDER BY updated_at DESC LIMIT 50",
+        "SELECT id, title, updated_at FROM cases WHERE user_id = %s ORDER BY updated_at DESC LIMIT 50",
         (uid,),
     ).fetchall()
     con.close()
@@ -688,16 +806,21 @@ def cases_get(case_id: str, user: Optional[AuthUser] = Depends(current_user_mayb
     uid = _cases_user_id(user)
     con = _get_db()
     row = con.execute(
-        "SELECT id, user_id, title, state, created_at, updated_at FROM cases WHERE id = ?",
+        "SELECT id, user_id, title, state, created_at, updated_at FROM cases WHERE id = %s",
         (case_id,),
     ).fetchone()
     con.close()
     if not row or row["user_id"] != uid:
         raise HTTPException(status_code=404, detail="Case not found")
-    try:
-        state = json.loads(row["state"] or "{}")
-    except json.JSONDecodeError:
-        state = {}
+    # JSONB returns a dict via psycopg; string fallback handles legacy sqlite rows.
+    raw_state = row["state"]
+    if isinstance(raw_state, str):
+        try:
+            state = json.loads(raw_state or "{}")
+        except json.JSONDecodeError:
+            state = {}
+    else:
+        state = raw_state or {}
     return {
         "id": row["id"],
         "title": row["title"],
@@ -715,7 +838,7 @@ async def cases_patch(
 ):
     uid = _cases_user_id(user)
     con = _get_db()
-    row = con.execute("SELECT user_id FROM cases WHERE id = ?", (case_id,)).fetchone()
+    row = con.execute("SELECT user_id FROM cases WHERE id = %s", (case_id,)).fetchone()
     if not row or row["user_id"] != uid:
         con.close()
         raise HTTPException(status_code=404, detail="Case not found")
@@ -723,12 +846,12 @@ async def cases_patch(
     state_json = json.dumps(req.state, ensure_ascii=False)
     if req.title is not None:
         con.execute(
-            "UPDATE cases SET state = ?, title = ?, updated_at = ? WHERE id = ?",
+            "UPDATE cases SET state = %s, title = %s, updated_at = %s WHERE id = %s",
             (state_json, req.title[:500], now, case_id),
         )
     else:
         con.execute(
-            "UPDATE cases SET state = ?, updated_at = ? WHERE id = ?",
+            "UPDATE cases SET state = %s, updated_at = %s WHERE id = %s",
             (state_json, now, case_id),
         )
     con.commit()
@@ -1211,14 +1334,22 @@ async def research(
     # fetch real PubMed links based on the case text so the UI always has actionable references.
     has_any_links = any(bool((p or {}).get("url")) for p in (papers or []))
     if not has_any_links:
-        with custom_span("pubmed_fallback_search", data={"reason": "no_urls_in_model_output"}):
-            pubmed_term = f"{req.symptoms}\n{req.followup_answers}\n{assessments_text}"
-            pubmed_papers = _pubmed_search_papers(pubmed_term, retmax=4)
-        if pubmed_papers:
-            papers = pubmed_papers
+        try:
+            with custom_span("pubmed_fallback_search", data={"reason": "no_urls_in_model_output"}):
+                pubmed_term = f"{req.symptoms}\n{req.followup_answers}\n{assessments_text}"
+                pubmed_papers = _pubmed_search_papers(pubmed_term, retmax=4)
+            if pubmed_papers:
+                papers = pubmed_papers
+                parse_warning = (
+                    (parse_warning + " " if parse_warning else "")
+                    + "Recovered PubMed links via direct search fallback."
+                )
+        except Exception as exc:
+            # NCBI rate-limits + network timeouts shouldn't fail the whole research stage.
+            log.warning("pubmed fallback search failed: %s", exc)
             parse_warning = (
                 (parse_warning + " " if parse_warning else "")
-                + "Recovered PubMed links via direct search fallback."
+                + "PubMed fallback unavailable."
             )
 
     return {"papers": papers, "parse_warning": parse_warning}
@@ -1389,14 +1520,14 @@ async def patient_message_followup(
 FREE_CONSULTATION_CAP = 4
 
 
-def _consultation_count(con: sqlite3.Connection, user_id: str) -> int:
+def _consultation_count(con, user_id: str) -> int:
     row = con.execute(
-        "SELECT COUNT(*) FROM consultations WHERE user_id = ?", (user_id,)
+        "SELECT COUNT(*) AS n FROM consultations WHERE user_id = %s", (user_id,)
     ).fetchone()
-    return int(row[0]) if row else 0
+    return int(row["n"]) if row else 0
 
 
-def _assert_consultation_cap(con: sqlite3.Connection, user_id: str, user_plan: str) -> None:
+def _assert_consultation_cap(con, user_id: str, user_plan: str) -> None:
     if user_plan == "pro":
         return
     count = _consultation_count(con, user_id)
@@ -1454,7 +1585,7 @@ async def save_consultation(
             """
             INSERT INTO consultations
               (id, user_id, case_id, summary, primary_dx, icd_code, urgency, confidence, created_at)
-            VALUES (?,?,?,?,?,?,?,?,?)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
             """,
             (
                 consultation_id,
@@ -1529,7 +1660,7 @@ async def list_consultations(
             """
             SELECT id, case_id, summary, primary_dx, icd_code, urgency, confidence, created_at
             FROM consultations
-            WHERE user_id = ?
+            WHERE user_id = %s
             ORDER BY created_at DESC
             """,
             (user_id,),
@@ -1607,6 +1738,60 @@ async def retrieve_consultations(
         con.close()
 
 
+@app.get("/api/patient/consultations/{consultation_id}")
+async def get_consultation(
+    consultation_id: str,
+    user: Optional[AuthUser] = Depends(current_user_maybe_required),
+):
+    """Return a single consultation joined with its case state.
+
+    Powers the /patient/consultations/[id] detail view — lets the UI re-render
+    the full seven-stage session (intake, follow-up, council, research,
+    consensus, plan, message) as tabs without firing a second `/api/cases/…`.
+    """
+    user_id = _cases_user_id(user)
+    con = _get_db()
+    try:
+        row = con.execute(
+            """
+            SELECT c.id, c.case_id, c.user_id, c.summary, c.primary_dx, c.icd_code,
+                   c.urgency, c.confidence, c.created_at,
+                   cs.state AS case_state, cs.title AS case_title
+            FROM consultations c
+            LEFT JOIN cases cs ON cs.id = c.case_id
+            WHERE c.id = %s
+            """,
+            (consultation_id,),
+        ).fetchone()
+        if row is None or (row["user_id"] or "") != user_id:
+            raise HTTPException(status_code=404, detail="Consultation not found.")
+
+        raw_state = row["case_state"]
+        if isinstance(raw_state, str):
+            try:
+                case_state = json.loads(raw_state or "{}")
+            except json.JSONDecodeError:
+                case_state = {}
+        else:
+            case_state = raw_state or {}
+
+        created_at = row["created_at"]
+        return {
+            "id": row["id"],
+            "case_id": row["case_id"],
+            "case_title": row["case_title"],
+            "summary": row["summary"],
+            "primary_dx": row["primary_dx"],
+            "icd_code": row["icd_code"],
+            "urgency": row["urgency"],
+            "confidence": row["confidence"],
+            "created_at": created_at.isoformat() if hasattr(created_at, "isoformat") else str(created_at or ""),
+            "case_state": case_state,
+        }
+    finally:
+        con.close()
+
+
 @app.delete("/api/patient/consultations/{consultation_id}")
 async def delete_consultation(
     consultation_id: str,
@@ -1618,11 +1803,11 @@ async def delete_consultation(
     con = _get_db()
     try:
         row = con.execute(
-            "SELECT user_id FROM consultations WHERE id = ?", (consultation_id,)
+            "SELECT user_id FROM consultations WHERE id = %s", (consultation_id,)
         ).fetchone()
         if row is None or (row["user_id"] or "") != user_id:
             raise HTTPException(status_code=404, detail="Consultation not found.")
-        con.execute("DELETE FROM consultations WHERE id = ?", (consultation_id,))
+        con.execute("DELETE FROM consultations WHERE id = %s", (consultation_id,))
         con.commit()
         try:
             get_vector_store().delete(con, consultation_id)
@@ -1730,7 +1915,7 @@ async def create_attachment(
     con = _get_db()
     try:
         row = con.execute(
-            "SELECT user_id FROM cases WHERE id = ?", (case_id,)
+            "SELECT user_id FROM cases WHERE id = %s", (case_id,)
         ).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Case not found.")
@@ -1806,7 +1991,7 @@ async def list_attachments(
     user_id = _cases_user_id(user)
     con = _get_db()
     try:
-        row = con.execute("SELECT user_id FROM cases WHERE id = ?", (case_id,)).fetchone()
+        row = con.execute("SELECT user_id FROM cases WHERE id = %s", (case_id,)).fetchone()
         if row is None:
             raise HTTPException(status_code=404, detail="Case not found.")
         if (row["user_id"] or "") != user_id:
@@ -1869,7 +2054,7 @@ async def speech_transcribe(
     this endpoint gates access to the higher-quality Whisper flow and is
     behind `require_pro`.
     """
-    from speech import get_speech_provider
+    from speech import get_speech_provider, SpeechQuotaError, SpeechUnavailableError
 
     try:
         data = await audio.read()
@@ -1882,6 +2067,16 @@ async def speech_transcribe(
         return {"text": text}
     except HTTPException:
         raise
+    except SpeechQuotaError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={"code": "transcribe_quota", "message": str(exc)},
+        ) from exc
+    except SpeechUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "transcribe_unavailable", "message": str(exc)},
+        ) from exc
     except Exception as exc:
         log.exception("transcription failed")
         raise HTTPException(status_code=502, detail={"code": "transcribe_failed", "message": str(exc)[:200]}) from exc
@@ -1904,6 +2099,8 @@ async def speech_synthesize(
     """
     from speech import get_speech_provider
 
+    from speech import SpeechQuotaError, SpeechUnavailableError
+
     voice = req.voice if req.voice in _SPEECH_VOICES else "alloy"
     try:
         provider = get_speech_provider()
@@ -1915,6 +2112,16 @@ async def speech_synthesize(
         )
     except HTTPException:
         raise
+    except SpeechQuotaError as exc:
+        raise HTTPException(
+            status_code=429,
+            detail={"code": "synthesize_quota", "message": str(exc)},
+        ) from exc
+    except SpeechUnavailableError as exc:
+        raise HTTPException(
+            status_code=503,
+            detail={"code": "synthesize_unavailable", "message": str(exc)},
+        ) from exc
     except Exception as exc:
         log.exception("synthesis failed")
         raise HTTPException(status_code=502, detail={"code": "synthesize_failed", "message": str(exc)[:200]}) from exc
