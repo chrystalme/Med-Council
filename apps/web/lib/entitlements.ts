@@ -77,6 +77,10 @@ export function computeWorkspaceIsPro(input: {
 export function useClientMounted(): boolean {
   const [mounted, setMounted] = useState(false);
   useEffect(() => {
+    // Canonical "detect client-side mount" pattern. React 19's eslint rule
+    // flags any setState-in-effect as a cascading-render risk, but this is
+    // exactly the idiomatic use it documents.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     setMounted(true);
   }, []);
   return mounted;
@@ -131,6 +135,10 @@ export function useIsPro(): { isPro: boolean; refresh: () => Promise<void> } {
 
   useEffect(() => {
     if (!isLoaded) return;
+    // Kicking off an async data fetch on mount is the canonical useEffect
+    // use-case; the resulting setServerPlan inside fetchPlan is batched by
+    // React so doesn't actually cascade. Safe to silence the blanket rule.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void fetchPlan(false);
     // Re-fetch every 30s while mounted so an upgrade propagates without
     // requiring a manual refresh. Cheap: just one /api/me call.

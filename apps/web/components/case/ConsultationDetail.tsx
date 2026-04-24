@@ -95,6 +95,9 @@ export function ConsultationDetail({ consultationId }: { consultationId: string 
   }, [consultationId, getToken, isSignedIn]);
 
   useEffect(() => {
+    // On-mount data fetch — canonical useEffect use; setState inside `load`
+    // is batched by React, not a cascading render.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (isLoaded) void load();
   }, [isLoaded, load]);
 

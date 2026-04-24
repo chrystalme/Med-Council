@@ -335,7 +335,7 @@ export function CaseWorkspace() {
     localStorage.setItem(LS_CASE, id);
     setCaseId(id);
     return id;
-  }, [tokenFn, symptoms]);
+  }, [tokenFn, symptoms, caseId]);
 
   const runIntake = async () => {
     setErr(null);
@@ -656,6 +656,10 @@ export function CaseWorkspace() {
 
   useEffect(() => {
     if (step === 7 && consensus && caseId && !consultationSaveError) {
+      // Idempotent save — the ref sentinel + localStorage key inside
+      // saveConsultation prevents duplicate POSTs even as this effect fires
+      // multiple times across renders.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       void saveConsultation();
     }
   }, [step, consensus, caseId, consultationSaveError, saveConsultation]);
@@ -689,6 +693,11 @@ export function CaseWorkspace() {
       autoRunRef.current[6] = true;
       void runMessage();
     }
+    // Deliberately omit runCouncil/runResearch/runConsensus/runPlan/runMessage
+    // from deps — their identities change on every render (they close over
+    // huge state), and including them would auto-advance stages endlessly.
+    // The autoRunRef guard above is the real idempotency mechanism.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [step, maxStep, busy, err]);
 
   const runFollowup = async () => {
