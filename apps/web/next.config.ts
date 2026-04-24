@@ -9,6 +9,9 @@ const API_ORIGIN =
   "http://localhost:8000";
 
 const nextConfig: NextConfig = {
+  // Emit a self-contained server bundle so the Docker image can run Next.js
+  // without the full node_modules tree. Produced under `.next/standalone/`.
+  output: "standalone",
   // Pin Turbopack's workspace root to this monorepo so Next.js
   // doesn't mistakenly latch onto a stray lockfile further up the tree.
   turbopack: {

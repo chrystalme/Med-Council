@@ -2,6 +2,7 @@
 
 import { useAuth } from "@clerk/nextjs";
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import { councilJson } from "@/lib/council-api";
 
 type Consultation = {
@@ -159,13 +160,18 @@ export function PatientFile() {
             return (
               <li
                 key={c.id}
-                className="plate-card p-5 relative flex flex-col gap-3"
+                className="plate-card p-5 relative flex flex-col gap-3 hover:border-indigo/40 transition-colors"
               >
+                <Link
+                  href={`/patient/consultations/${c.id}`}
+                  aria-label={`Open consultation — ${c.primary_dx || "Unspecified"} from ${dateFull}`}
+                  className="absolute inset-0 rounded-[inherit] z-0 focus-visible:ring-2 focus-visible:ring-indigo"
+                />
                 <span
                   aria-hidden
                   className="plate-corner absolute top-3 left-3 h-3 w-3"
                 />
-                <div className="flex items-baseline justify-between gap-3 pt-4">
+                <div className="flex items-baseline justify-between gap-3 pt-4 relative z-10 pointer-events-none">
                   <p className="mono-label">{dateFull}</p>
                   <span
                     className={[
@@ -180,17 +186,17 @@ export function PatientFile() {
                     {u.label}
                   </span>
                 </div>
-                <h2 className="font-display text-[1.25rem] leading-tight text-ink">
+                <h2 className="font-display text-[1.25rem] leading-tight text-ink relative z-10 pointer-events-none">
                   {c.primary_dx || "Unspecified"}
                 </h2>
                 {c.icd_code && (
-                  <p className="mono-label text-ink-muted">
+                  <p className="mono-label text-ink-muted relative z-10 pointer-events-none">
                     ICD-10 <span className="diamond" />{" "}
                     <span className="font-mono text-ink">{c.icd_code}</span>
                   </p>
                 )}
                 {typeof c.confidence === "number" && (
-                  <div className="flex items-center gap-2">
+                  <div className="flex items-center gap-2 relative z-10 pointer-events-none">
                     <div className="relative h-1.5 flex-1 rounded-full bg-periwinkle-soft overflow-hidden">
                       <div
                         className="absolute inset-y-0 left-0 rounded-full bg-cornflower"
@@ -204,13 +210,20 @@ export function PatientFile() {
                     </span>
                   </div>
                 )}
-                <p className="text-[14px] text-ink-slate leading-relaxed line-clamp-4">
+                <p className="text-[14px] text-ink-slate leading-relaxed line-clamp-4 relative z-10 pointer-events-none">
                   {c.summary}
                 </p>
-                <div className="flex items-center justify-end gap-3 pt-1 mt-auto">
+                <div className="flex items-center justify-between gap-3 pt-1 mt-auto relative z-10">
+                  <span className="mono-label text-indigo pointer-events-none">
+                    open detail →
+                  </span>
                   <button
                     type="button"
-                    onClick={() => void onDelete(c.id)}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      e.preventDefault();
+                      void onDelete(c.id);
+                    }}
                     disabled={deleting === c.id}
                     className="mono-label text-ink-muted hover:text-urgent transition-colors disabled:opacity-50"
                   >

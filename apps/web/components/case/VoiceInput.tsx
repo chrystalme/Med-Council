@@ -210,6 +210,7 @@ export function VoiceInput({ onTranscript, disabled, label = "Voice input", onPa
         type="button"
         onClick={onClick}
         disabled={!canStart && !listening}
+        suppressHydrationWarning
         aria-label={label}
         title={
           !browserSupported && mode === "browser"

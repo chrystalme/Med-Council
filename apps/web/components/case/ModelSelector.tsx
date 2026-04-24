@@ -3,6 +3,7 @@
 import { useAuth } from "@clerk/nextjs";
 import { useCallback, useEffect, useState } from "react";
 import { councilJson } from "@/lib/council-api";
+import { useClientMounted } from "@/lib/entitlements";
 
 type ModelOption = {
   key: string;
@@ -31,6 +32,7 @@ export function ModelSelector({
   disabled?: boolean;
 }) {
   const { getToken } = useAuth();
+  const mounted = useClientMounted();
   const [state, setState] = useState<ModelsResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
 
@@ -58,8 +60,21 @@ export function ModelSelector({
     return null;
   }
 
-  const selected = state?.models.find((m) => m.key === value)
-    ?? state?.models.find((m) => m.key === state.default);
+  // Don't render the live `<select>` until after mount. Server HTML and the
+  // first client render both emit the skeleton placeholder, so there's nothing
+  // for React to diff against a post-fetch state. Prevents hydration warnings
+  // on the `disabled` attribute (which flips once `state` arrives).
+  if (!mounted || !state) {
+    return (
+      <div className="inline-flex items-center gap-2" aria-busy="true">
+        <span className="mono-label text-ink-faint">Model</span>
+        <span className="skeleton h-7 w-40 rounded-full" aria-hidden />
+      </div>
+    );
+  }
+
+  const selected = state.models.find((m) => m.key === value)
+    ?? state.models.find((m) => m.key === state.default);
 
   return (
     <div className="inline-flex items-center gap-2">
@@ -67,7 +82,7 @@ export function ModelSelector({
       <div className="relative inline-flex">
         <select
           value={selected?.key ?? ""}
-          disabled={disabled || !state}
+          disabled={!!disabled}
           onChange={(e) => {
             const next = e.target.value;
             onChange(next);
@@ -79,7 +94,7 @@ export function ModelSelector({
           }}
           className="appearance-none bg-surface border border-line-strong hover:border-line-deep focus:border-indigo focus:outline-none focus:ring-2 focus:ring-indigo-soft text-[13px] text-ink pl-3 pr-8 py-1.5 rounded-full transition-colors disabled:opacity-50 cursor-pointer"
         >
-          {(state?.models ?? []).map((m) => (
+          {state.models.map((m) => (
             <option key={m.key} value={m.key} disabled={m.locked}>
               {m.label}
               {m.locked ? " (Pro)" : ""}
