@@ -471,9 +471,34 @@ async def run_agent_raw(agent: Agent, prompt: str, *, model: str | None = None) 
     responses, 5xx upstream failures, and rate-limit backpressure.
     """
     provider, clean_model = _resolve_runtime_model(agent, model)
+
+    # IMPORTANT: we observed that openai-agents' Runner ignores
+    # RunConfig.model_provider / RunConfig.model when the Agent's own `.model`
+    # field is a string — it falls back to the global `set_default_openai_client`
+    # (OpenRouter) and sends the raw string slug, leaking our `vertex:…`
+    # prefix to OpenRouter which 400s.
+    #
+    # Fix: clone the agent with the pre-bound Model instance so `agent.model`
+    # IS the Model itself. The Runner then uses it directly — no provider
+    # lookup, no global-client fallback, no slug to leak. The clone is cheap
+    # and keeps the shared agent registry in council.py immutable per-request.
+    # openai-agents v0.14 resolves `agent.model` to a string first and then
+    # routes via the global default client, so a plain `RunConfig.model_provider`
+    # override isn't honored. Cloning the agent with the pre-bound Model
+    # instance forces Runner's `get_model()` down the `isinstance(agent.model,
+    # Model)` branch — no string, no provider lookup, no fallback to the
+    # global OpenRouter client. Falls back to the original agent if clone
+    # fails so we never crash on this transformation alone.
+    run_agent = agent
+    if clean_model is not None and not isinstance(clean_model, str):
+        try:
+            run_agent = agent.clone(model=clean_model)
+        except Exception:
+            run_agent = agent
+
     rc = RunConfig(
         model_provider=provider,
-        model=clean_model,  # None falls through to agent.model inside Runner
+        model=clean_model,  # belt-and-braces; the clone above is the real fix
         trace_include_sensitive_data=True,
     )
 
@@ -481,7 +506,7 @@ async def run_agent_raw(agent: Agent, prompt: str, *, model: str | None = None) 
     last_exc: BaseException | None = None
     for attempt in range(1, max_attempts + 1):
         try:
-            result = await Runner.run(agent, prompt, run_config=rc)
+            result = await Runner.run(run_agent, prompt, run_config=rc)
             return result.final_output
         except Exception as exc:
             last_exc = exc

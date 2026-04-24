@@ -110,18 +110,18 @@ def _parse_medical_check(raw: str) -> MedicalTopicCheck:
 async def _check_medical_topic(
     ctx: RunContextWrapper, agent: Agent, input: str | list,
 ) -> GuardrailFunctionOutput:
-    """InputGuardrail function: runs the classifier and trips if non-medical."""
-    from agents.run_config import RunConfig
-    from agents.models.multi_provider import MultiProvider
+    """InputGuardrail function: runs the classifier and trips if non-medical.
+
+    Routed through `main.run_agent_raw` so the guardrail goes through the
+    same `vertex:` / OpenRouter resolver the rest of the pipeline uses.
+    Building a fresh RunConfig here (without a concrete Model instance) used
+    to leak the raw `vertex:…` slug into OpenRouter's MultiProvider and 400,
+    which then blocked every case at the intake stage.
+    """
     text = input if isinstance(input, str) else str(input)
-    # Use the same model_provider setup as the main app
     import main as _main
-    rc = RunConfig(
-        model_provider=_main._council_model_provider or MultiProvider(),
-        trace_include_sensitive_data=True,
-    )
-    result = await Runner.run(_medical_topic_agent, text, run_config=rc)
-    check = _parse_medical_check(result.final_output if isinstance(result.final_output, str) else str(result.final_output))
+    raw = await _main.run_agent_raw(_medical_topic_agent, text)
+    check = _parse_medical_check(raw if isinstance(raw, str) else str(raw))
     return GuardrailFunctionOutput(
         output_info={"is_medical": check.is_medical, "reasoning": check.reasoning},
         tripwire_triggered=not check.is_medical,
