@@ -27,7 +27,7 @@ medai-council/
 └── README.md
 ```
 
-Two services, two deploy targets — eventually both on GCP Cloud Run.
+Two services, one deploy target: **GCP**. The FastAPI backend runs on Cloud Run with Cloud SQL (Postgres) and Cloud Storage (GCS) for blobs; the Next.js app ships alongside it (Cloud Run service or Firebase Hosting, depending on build needs). Local dev uses your own Postgres and the filesystem — configured entirely by env vars (`DATABASE_URL`, `STORAGE_BACKEND`).
 
 ---
 
@@ -36,11 +36,13 @@ Two services, two deploy targets — eventually both on GCP Cloud Run.
 - **Node ≥ 20** and **pnpm ≥ 9** (for the web app)
 - **[uv](https://docs.astral.sh/uv/getting-started/installation/)** (for the API — installs Python 3.12 + deps from `apps/api/pyproject.toml`)
 - **Python 3.12** (optional if you let `uv` manage interpreters; see `apps/api/.python-version`)
+- **Postgres 15+** running locally (Postgres.app, `brew services start postgresql@15`, or Docker). Create a database named `medai_council`.
 - Accounts:
   - [OpenRouter](https://openrouter.ai) — model inference
   - [OpenAI](https://platform.openai.com) — tracing only (free)
   - [Clerk](https://dashboard.clerk.com) — authentication
-  - _Later:_ Neon, Resend, GCP
+  - [Resend](https://resend.com) — patient / on-call email (optional in dev)
+  - **GCP** — Cloud Run + Cloud SQL + GCS for deployment
 
 ---
 
@@ -67,7 +69,7 @@ cd apps/api
 uv sync
 ```
 
-`requirements.txt` in `apps/api/` is **exported from the lockfile** (`uv export …`) for hosts that only read `requirements.txt` (e.g. some Docker/Vercel flows). After changing dependencies in `pyproject.toml`, run `uv lock` and re-export:
+`requirements.txt` in `apps/api/` is **exported from the lockfile** (`uv export …`) for Docker builds and any host that only reads `requirements.txt`. After changing dependencies in `pyproject.toml`, run `uv lock` and re-export:
 
 ```bash
 cd apps/api && uv lock && uv export --no-hashes --no-dev -o requirements.txt
@@ -86,6 +88,8 @@ Minimum required to run the API:
 
 - `OPENROUTER_API_KEY` · [openrouter.ai/keys](https://openrouter.ai/keys)
 - `OPENAI_API_KEY` · [platform.openai.com/api-keys](https://platform.openai.com/api-keys) (tracing only)
+- `DATABASE_URL` · e.g. `postgresql://$USER@localhost:5432/medai_council` (local Postgres). When deployed, set this to the Cloud SQL connection string.
+- `STORAGE_BACKEND` · `local` (default; writes under `apps/api/storage_data/`) or `gcs` — with `GCS_BUCKET=<your-bucket>` when set to `gcs`.
 
 The web app can boot in **Clerk Keyless mode** without any Clerk keys
 — Clerk auto-provisions temporary dev keys the first time it loads,
@@ -144,16 +148,62 @@ A follow-up Q&A loop is available at `POST /api/message/followup`.
 
 ---
 
+## Deploy (GCP)
+
+Terraform under `terraform/` provisions the full stack:
+
+- **Artifact Registry** — Docker repo for the API image.
+- **Cloud SQL (Postgres 15)** — `medai_council` database; pgvector is
+  enabled by the API at startup.
+- **GCS bucket** — attachment blobs (when `STORAGE_BACKEND=gcs`).
+- **Cloud Run v2** — runs `apps/api/Dockerfile`, mounts the Cloud SQL socket
+  at `/cloudsql`, binds secrets from Secret Manager as env vars.
+- **Secret Manager** — container resources for `OPENROUTER_API_KEY`,
+  `OPENAI_API_KEY`, `CLERK_*`, `RESEND_*`, `DATABASE_URL`, etc. Values
+  provisioned after `terraform apply` (see `terraform/README.md`).
+
+Build + push + apply:
+
+```bash
+REGION=us-central1
+PROJECT=$(gcloud config get-value project)
+TAG=$(git rev-parse --short HEAD)
+
+gcloud auth configure-docker ${REGION}-docker.pkg.dev -q
+docker buildx build --platform linux/amd64 \
+  -f apps/api/Dockerfile \
+  -t ${REGION}-docker.pkg.dev/${PROJECT}/medai/api:${TAG} \
+  --push apps/api
+
+cd terraform
+terraform init -backend-config="bucket=${PROJECT}-tfstate"
+terraform apply -var="project_id=${PROJECT}" -var="image_tag=${TAG}"
+```
+
+See `terraform/README.md` for first-time setup and secret population.
+
+---
+
 ## Roadmap
 
 - [x] **Step 1** — commit current state to `main`
 - [x] **Step 2a** — monorepo restructure + Next.js scaffold + Clerk auth gate
 - [x] **Step 2b–d** — seven pipeline stages in `/case` (`CaseWorkspace` → FastAPI)
-- [x] **Step 3** — case autosave via SQLite `cases` table + `/api/cases` _(Neon/Postgres later)_
+- [x] **Step 3** — case autosave via SQLite `cases` table + `/api/cases` _(migrating to Postgres)_
 - [x] **Step 4** — on-call email via Resend when consensus urgency is high _(needs `RESEND\__` env)\*
 - [x] **Step 5** — optional `RATE_LIMIT_ENABLED` sliding window on `POST /api/*` _(SSE / parallel fan-out still open)_
 - [x] **Step 6** — paywall banner placeholder (`NEXT_PUBLIC_FEATURE_PAYWALL=1`) _(Stripe later)_
-- [ ] **Step 7** — GCP migration (Cloud Run + Cloud SQL)
+- [ ] **Step 7** — GCP migration (Cloud Run + Cloud SQL + GCS)
+  - [x] Remove Vercel artefacts; target GCP Cloud Run
+  - [x] Add `psycopg` + `alembic` + `google-cloud-storage`; introduce `db.py` and `storage.py` seams
+  - [x] Port SQL sites in `main.py` / `council_tools.py` to Postgres (`%s`, `TIMESTAMPTZ`, `JSONB`)
+  - [x] `vector_store.py` → `pgvector` (`vector` column + `<=>` cosine operator)
+  - [x] `attachments.py` → Postgres `bytea` (GCS swap stays stubbed for deploy step)
+  - [x] Alembic scaffold + initial migration (`alembic/versions/0001_initial.py`); `alembic upgrade head` runs on container startup via `docker-entrypoint.sh`
+  - [x] Speech provider swap (`SPEECH_PROVIDER=openai|gcloud|disabled`) with Groq-compatible base-URL override and structured 429 on quota exhaustion
+  - [ ] `GcsAttachmentStore` — move blobs to `storage.get_storage()`, keep metadata in Postgres
+  - [x] Dockerfile (multi-stage, non-root, tini, runs migrations before uvicorn) at `apps/api/Dockerfile`
+  - [x] Terraform (Cloud Run + Cloud SQL + pgvector + GCS + Secret Manager + Artifact Registry + Speech APIs) under `terraform/`
 
 ---
 
