@@ -40,7 +40,7 @@ from urllib.parse import quote_plus
 from urllib.request import Request, urlopen
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
-from fastapi.responses import FileResponse, HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, field_validator
 
@@ -286,8 +286,6 @@ app = FastAPI(
     lifespan=lifespan,
     redirect_slashes=False,
 )
-
-_UI_INDEX = Path(__file__).resolve().parent / "static" / "index.html"
 
 def _allowed_origins() -> list[str]:
     """Comma-separated origin list from ALLOWED_ORIGINS. Defaults to `*` for dev.
@@ -739,15 +737,30 @@ class PatientFollowUpIn(_ModeledRequest):
 
 
 @app.get("/")
-async def serve_ui():
-    """Single-page UI served from the same ASGI app so HTML and API share one origin."""
-    if _UI_INDEX.is_file():
-        return FileResponse(_UI_INDEX, media_type="text/html; charset=utf-8")
-    raise HTTPException(status_code=404, detail="UI not found (missing static/index.html)")
+async def serve_root():
+    """Root of the API service.
+
+    In the GCP deploy the UI lives on a separate Cloud Run service, so `/` here
+    redirects the browser to `WEB_BASE_URL` when that env var is set (which it
+    is on prod). Without it — local dev, ad-hoc curl — we return a minimal
+    JSON pointer instead of the legacy `static/index.html`, which was the old
+    Vercel-era UI and is retired.
+    """
+    web_url = os.environ.get("WEB_BASE_URL", "").strip()
+    if web_url:
+        return RedirectResponse(web_url, status_code=302)
+    return JSONResponse(
+        {
+            "service": "MedAI Council API",
+            "docs": "/docs",
+            "health": "/health",
+            "ui": "UI lives on a separate Cloud Run service — set WEB_BASE_URL on this container to auto-redirect.",
+        }
+    )
 
 
 @app.get("/index.html", include_in_schema=False)
-async def serve_ui_index_alias():
+async def serve_index_alias():
     return RedirectResponse("/", status_code=307)
 
 

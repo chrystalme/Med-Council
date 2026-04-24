@@ -51,6 +51,8 @@ export function ModelSelector({
   }, [getToken]);
 
   useEffect(() => {
+    // Fetch model list once when the component mounts — classic useEffect.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void load();
   }, [load]);
 
@@ -130,6 +132,9 @@ export function useStoredModelKey(defaultKey: string = "nvidia-nemotron-free") {
     if (typeof window === "undefined") return;
     try {
       const stored = localStorage.getItem(LS_MODEL);
+      // Hydrate the picker from localStorage after mount so SSR (which can't
+      // read localStorage) and the first client render start identical.
+      // eslint-disable-next-line react-hooks/set-state-in-effect
       if (stored) setKey(stored);
     } catch {
       /* ignore */

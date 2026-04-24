@@ -65,6 +65,8 @@ export function DebugMe() {
   );
 
   useEffect(() => {
+    // On-mount fetch once auth is ready — idiomatic useEffect usage.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (isLoaded && isSignedIn) void run(false);
   }, [isLoaded, isSignedIn, run]);
 

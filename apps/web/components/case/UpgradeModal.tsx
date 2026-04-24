@@ -1,6 +1,7 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
+import Link from "next/link";
 import type { CouncilApiError } from "@/lib/council-api";
 
 type Prompt = {
@@ -128,13 +129,13 @@ export function UpgradeModal({
             Got it
           </button>
           {prompt.cta ? (
-            <a href={prompt.cta.href} className="btn-indigo">
+            <Link href={prompt.cta.href} className="btn-indigo">
               {prompt.cta.label}
-            </a>
+            </Link>
           ) : (
-            <a href="/#pricing" className="btn-indigo">
+            <Link href="/#pricing" className="btn-indigo">
               See Pro plan
-            </a>
+            </Link>
           )}
         </div>
       </div>

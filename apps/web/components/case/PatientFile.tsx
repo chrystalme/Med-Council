@@ -58,6 +58,8 @@ export function PatientFile() {
   }, [getToken, isSignedIn]);
 
   useEffect(() => {
+    // On-mount fetch of consultation list once Clerk has resolved.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     if (isLoaded) void load();
   }, [isLoaded, load]);
 

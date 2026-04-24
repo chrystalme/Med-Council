@@ -214,6 +214,14 @@ resource "google_cloud_run_v2_service" "api" {
         name  = "SPEECH_PROVIDER"
         value = "gcloud"
       }
+      # Where to redirect GET / to. Without this the API's `/` returns a small
+      # JSON landing page instead of the legacy static UI. On prod we point
+      # at the web Cloud Run service so /api typos still land the user at the
+      # real UI.
+      env {
+        name  = "WEB_BASE_URL"
+        value = google_cloud_run_v2_service.web.uri
+      }
 
       # Secrets → env vars.
       dynamic "env" {
@@ -320,11 +328,11 @@ resource "google_cloud_run_v2_service" "web" {
         container_port = 3000
       }
 
-      # Server-side — Next.js rewrites /api/* to the API service.
-      env {
-        name  = "API_BASE_URL"
-        value = google_cloud_run_v2_service.api.uri
-      }
+      # `API_BASE_URL` is intentionally NOT set here. Next.js freezes the
+      # rewrites() result at build time in standalone output, so the API
+      # origin is baked into the image via the Docker build-arg — passing a
+      # runtime env of the same name would be dead-letter and also create a
+      # terraform cycle with the api service (which now redirects / → web).
 
       # Client-side base is intentionally empty: `councilFetch` passes paths
       # that already start with `/api/...`, so prepending anything here would

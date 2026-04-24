@@ -69,6 +69,9 @@ export function TestAttachment({
   }, [caseId, getToken]);
 
   useEffect(() => {
+    // Refresh the attachment list on mount and whenever the caseId closure
+    // inside `refresh` changes — this is the on-mount fetch pattern.
+    // eslint-disable-next-line react-hooks/set-state-in-effect
     void refresh();
   }, [refresh]);
 
