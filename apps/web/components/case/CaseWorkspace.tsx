@@ -2,7 +2,51 @@
 
 import { useAuth } from '@clerk/nextjs';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { councilJson } from '@/lib/council-api';
+import { councilJson, CouncilApiError } from '@/lib/council-api';
+
+/**
+ * Turn any thrown value from a council API call into a human-readable,
+ * stage-aware error message. Structured `CouncilApiError` codes get specific
+ * copy that tells the user what to try next (switch model, wait, upgrade…)
+ * instead of leaking provider stack traces as a "Fault" banner.
+ */
+function formatCouncilError(e: unknown, stageLabel: string): string {
+  if (e instanceof CouncilApiError) {
+    const detail = e.detail;
+    const structured =
+      detail && typeof detail === 'object' && 'code' in detail
+        ? (detail as { code?: string; message?: string })
+        : null;
+    const code = structured?.code ?? e.code;
+    const message = structured?.message;
+
+    if (code === 'bad_model') {
+      return (
+        (message ?? 'The selected model was rejected by the provider.') +
+        ' Pick another model from the selector at the top of the page and click the stage again.'
+      );
+    }
+    if (code === 'groq_not_configured') {
+      return (
+        message ??
+        'Free-tier model is unavailable (server misconfigured). Pick a Pro model or try again later.'
+      );
+    }
+    if (code === 'provider_unavailable') {
+      return (
+        (message ?? 'The model provider is temporarily unavailable.') +
+        ' Try again in a moment, or switch to a different model.'
+      );
+    }
+    if (code === 'consultation_cap' || code === 'attachment_size' || code === 'voice_premium') {
+      // Upgrade-modal codes are already handled upstream; just surface the message.
+      return message ?? `${stageLabel} failed.`;
+    }
+    return message ?? `${stageLabel} failed (HTTP ${e.status}).`;
+  }
+  if (e instanceof Error) return e.message;
+  return `${stageLabel} failed.`;
+}
 import { PaywallBanner } from './PaywallBanner';
 import { Markdown } from './Markdown';
 import { ConsensusView } from './ConsensusView';
@@ -321,7 +365,7 @@ export function CaseWorkspace() {
       await ensureCase();
       advanceTo(1);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Intake failed');
+      setErr(formatCouncilError(e, 'Intake'));
     } finally {
       setBusy(null);
     }
@@ -349,7 +393,7 @@ export function CaseWorkspace() {
       autoRunRef.current = { 2: false, 3: false, 4: false, 5: false, 6: false };
       advanceTo(2);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Expert selection failed');
+      setErr(formatCouncilError(e, 'Expert selection'));
     } finally {
       setBusy(null);
     }
@@ -407,7 +451,7 @@ export function CaseWorkspace() {
       setPhysicians(out);
       advanceTo(3);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Council failed');
+      setErr(formatCouncilError(e, 'Council'));
     } finally {
       setBusy(null);
     }
@@ -440,7 +484,7 @@ export function CaseWorkspace() {
       setParseWarning(data.parse_warning ?? '');
       advanceTo(4);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Research failed');
+      setErr(formatCouncilError(e, 'Research'));
     } finally {
       setBusy(null);
     }
@@ -473,7 +517,7 @@ export function CaseWorkspace() {
       setConsensus(data.consensus ?? null);
       advanceTo(5);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Consensus failed');
+      setErr(formatCouncilError(e, 'Consensus'));
     } finally {
       setBusy(null);
     }
@@ -509,7 +553,7 @@ export function CaseWorkspace() {
       setPlan(data.plan ?? '');
       advanceTo(6);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Plan failed');
+      setErr(formatCouncilError(e, 'Plan'));
     } finally {
       setBusy(null);
     }
@@ -534,7 +578,7 @@ export function CaseWorkspace() {
       setMessage(data.message ?? '');
       advanceTo(7);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Message failed');
+      setErr(formatCouncilError(e, 'Message'));
     } finally {
       setBusy(null);
     }
@@ -673,7 +717,7 @@ export function CaseWorkspace() {
       );
       setFollowupReply(data.reply ?? '');
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Follow-up failed');
+      setErr(formatCouncilError(e, 'Follow-up'));
     } finally {
       setBusy(null);
     }

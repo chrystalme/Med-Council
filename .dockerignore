@@ -1,0 +1,47 @@
+# Keep the Docker build context minimal and deterministic.
+# The web Dockerfile builds with the repo root as context; without this file
+# the Mac-native `apps/web/node_modules` would clobber the linux/amd64
+# node_modules installed inside the deps stage.
+
+# Dependency trees (installed per-stage inside the image)
+node_modules
+**/node_modules
+.pnpm-store
+
+# Build outputs
+.next
+**/.next
+.turbo
+**/.turbo
+apps/api/.venv
+**/__pycache__
+*.pyc
+
+# Local-only artefacts
+.git
+.github/
+.DS_Store
+.vscode/
+.idea/
+*.log
+coverage
+
+# Local env + DB files — never bake into an image
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+apps/api/feedback.db
+apps/api/storage_data/
+
+# Terraform state + plans (sensitive)
+terraform/.terraform/
+terraform/*.tfstate*
+terraform/*.tfplan
+terraform/terraform.tfvars
+
+# Editor/tooling caches
+.claude/
+.cache/

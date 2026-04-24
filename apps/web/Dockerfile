@@ -35,6 +35,20 @@ ENV NEXT_TELEMETRY_DISABLED=1
 ARG NEXT_PUBLIC_API_BASE_URL=/api
 ENV NEXT_PUBLIC_API_BASE_URL=${NEXT_PUBLIC_API_BASE_URL}
 
+# Server-side API origin for the Next rewrite. Next.js evaluates rewrites()
+# at build time in standalone output, so this MUST be present at build, not
+# only at runtime on Cloud Run. Default is the local API for compose; in prod
+# pass the deployed Cloud Run API URL via --build-arg.
+ARG API_BASE_URL=http://localhost:8000
+ENV API_BASE_URL=${API_BASE_URL}
+
+# Clerk publishable key is read by ClerkProvider in the client bundle, which
+# means Next.js inlines it at build time — it must be present here, not just
+# at runtime. Publishable keys are public by design (visible in every rendered
+# HTML page), so baking into the image is safe.
+ARG NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY
+ENV NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY}
+
 RUN pnpm --filter web build
 
 
