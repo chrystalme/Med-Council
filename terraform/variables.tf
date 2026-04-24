@@ -109,5 +109,31 @@ variable "secret_names" {
     "ONCALL_DOCTOR_EMAIL",
     "FEEDBACK_SECRET",
     "DATABASE_URL",
+    "NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY",
   ]
+}
+
+# Web (Next.js) service configuration.
+variable "web_service_name" {
+  description = "Cloud Run service name for the Next.js frontend."
+  type        = string
+  default     = "medai-web"
+}
+
+variable "web_image_tag" {
+  description = "Tag of the web image to deploy. Defaults to image_tag so both services roll together."
+  type        = string
+  default     = ""
+}
+
+variable "web_min_instances" {
+  description = "Cloud Run min instances for the web service."
+  type        = number
+  default     = 1
+}
+
+variable "web_max_instances" {
+  description = "Cloud Run max instances for the web service."
+  type        = number
+  default     = 10
 }
