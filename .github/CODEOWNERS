@@ -1,0 +1,11 @@
+# Every PR requires review from a code owner.
+# Replace @OWNER with the GitHub handle(s) that should own each path.
+
+*                       @chrystalme
+
+/apps/web/              @chrystalme
+/apps/api/              @chrystalme
+/apps/api/auth.py       @chrystalme
+/apps/api/escalation.py @chrystalme
+
+/.github/               @chrystalme

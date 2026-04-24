@@ -16,7 +16,6 @@ export type AttachmentRow = {
   mime_type: string | null;
   size_bytes: number;
   text_preview: string;
-  question_index: number | null;
   created_at: string;
 };
 
@@ -29,30 +28,24 @@ function humanSize(bytes: number): string {
 }
 
 /**
- * Case-level test-results panel. Renders a single block containing:
- *   - file upload
- *   - paste-text area
- *   - list of ALL attachments for this case (deduped, any question)
+ * Case-level test-results panel. One document per case — the council reads it
+ * alongside every follow-up question, so there's no per-question tagging.
  *
- * Attachments are optionally tagged to a follow-up question via the inline
- * dropdown. Defaults to "Any question" (question_index=null).
+ * Accepts a file upload OR pasted text (e.g. pasted lab values). Lists the
+ * current attachment so it can be replaced or removed.
  */
 export function TestAttachment({
   caseId,
-  questionOptions,
   onChange,
   onPaywallError,
 }: {
   caseId: string | null;
-  /** Labels for the follow-up questions, used by the optional tag dropdown. */
-  questionOptions?: string[];
   onChange?: () => void;
   onPaywallError?: (err: unknown) => void;
 }) {
   const { getToken } = useAuth();
   const [rows, setRows] = useState<AttachmentRow[]>([]);
   const [pasted, setPasted] = useState("");
-  const [selectedQ, setSelectedQ] = useState<number | null>(null);
   const [status, setStatus] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const fileRef = useRef<HTMLInputElement | null>(null);
@@ -133,11 +126,10 @@ export function TestAttachment({
       const fd = new FormData();
       fd.append("file", f);
       fd.append("kind", "file");
-      if (selectedQ !== null) fd.append("question_index", String(selectedQ));
       await uploadForm(fd);
       if (fileRef.current) fileRef.current.value = "";
     },
-    [selectedQ, uploadForm]
+    [uploadForm]
   );
 
   const commitPasted = useCallback(
@@ -146,11 +138,10 @@ export function TestAttachment({
       const fd = new FormData();
       fd.append("text", text);
       fd.append("kind", "pasted");
-      if (selectedQ !== null) fd.append("question_index", String(selectedQ));
       await uploadForm(fd);
       setPasted("");
     },
-    [selectedQ, uploadForm]
+    [uploadForm]
   );
 
   const onPasteChange = (val: string) => {
@@ -188,9 +179,10 @@ export function TestAttachment({
           <p className="mono-label">
             Test results <span className="diamond" /> optional
           </p>
-          <p className="text-[13px] text-ink-slate mt-0.5 max-w-[52ch]">
-            Attach lab PDFs, imaging reports, or paste values. Everything here
-            is fed to the council, consensus, and plan agents.
+          <p className="text-[13px] text-ink-slate mt-0.5 max-w-[56ch]">
+            One document covers every question — upload a lab PDF, imaging
+            report, or paste the values. The council reads it alongside the
+            full case.
           </p>
         </div>
         <span className="mono-label text-ink-faint shrink-0">
@@ -205,34 +197,6 @@ export function TestAttachment({
       </div>
 
       <div className="flex flex-wrap items-center gap-2">
-        {questionOptions && questionOptions.length > 0 && (
-          <div className="relative">
-            <select
-              value={selectedQ === null ? "" : String(selectedQ)}
-              onChange={(e) => {
-                const v = e.target.value;
-                setSelectedQ(v === "" ? null : Number(v));
-              }}
-              disabled={!caseId}
-              className="appearance-none bg-surface border border-line-strong focus:border-indigo focus:outline-none focus:ring-2 focus:ring-indigo-soft text-[13px] text-ink pl-3 pr-8 py-1.5 rounded-full transition-colors disabled:opacity-50"
-            >
-              <option value="">Tag → any question</option>
-              {questionOptions.map((q, i) => (
-                <option key={i} value={i}>
-                  Tag → Q{i + 1}: {q.slice(0, 40)}
-                  {q.length > 40 ? "…" : ""}
-                </option>
-              ))}
-            </select>
-            <span
-              aria-hidden
-              className="pointer-events-none absolute inset-y-0 right-2.5 inline-flex items-center text-ink-faint"
-            >
-              ▾
-            </span>
-          </div>
-        )}
-
         <label
           className={[
             "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-[13px] cursor-pointer transition-colors",
@@ -241,7 +205,7 @@ export function TestAttachment({
               : "border-line text-ink-faint opacity-60 cursor-not-allowed",
           ].join(" ")}
         >
-          <span aria-hidden>📎</span> Attach file
+          <span aria-hidden>📎</span> Attach document
           <input
             ref={fileRef}
             type="file"
@@ -264,7 +228,7 @@ export function TestAttachment({
 
       <textarea
         className="field min-h-[60px] text-[13.5px]"
-        placeholder="Or paste test values here (auto-saves after a short pause)…"
+        placeholder="Or paste the test values here (auto-saves after a short pause)…"
         disabled={!caseId}
         value={pasted}
         onChange={(e) => onPasteChange(e.target.value)}
@@ -272,46 +236,37 @@ export function TestAttachment({
 
       {rows.length > 0 && (
         <ul className="space-y-1.5">
-          {rows.map((r) => {
-            const qTag =
-              r.question_index !== null && questionOptions?.[r.question_index]
-                ? `Q${r.question_index + 1}`
-                : null;
-            return (
-              <li
-                key={r.id}
-                className="flex items-start justify-between gap-3 text-[13px] bg-surface border border-line rounded-lg p-2.5"
-              >
-                <div className="min-w-0 flex-1">
-                  <div className="flex items-baseline gap-2 flex-wrap">
-                    <p className="font-medium text-ink truncate">
-                      {r.kind === "file"
-                        ? r.filename || "attachment"
-                        : "pasted text"}
-                    </p>
-                    <span className="mono-label text-ink-faint">
-                      {humanSize(r.size_bytes)}
-                    </span>
-                    {qTag && (
-                      <span className="mono-label text-indigo">{qTag}</span>
-                    )}
-                  </div>
-                  <p className="text-ink-slate truncate mt-0.5">
-                    {(r.text_preview || "").slice(0, 140)}
-                    {r.text_preview && r.text_preview.length > 140 ? "…" : ""}
+          {rows.map((r) => (
+            <li
+              key={r.id}
+              className="flex items-start justify-between gap-3 text-[13px] bg-surface border border-line rounded-lg p-2.5"
+            >
+              <div className="min-w-0 flex-1">
+                <div className="flex items-baseline gap-2 flex-wrap">
+                  <p className="font-medium text-ink truncate">
+                    {r.kind === "file"
+                      ? r.filename || "attachment"
+                      : "pasted text"}
                   </p>
+                  <span className="mono-label text-ink-faint">
+                    {humanSize(r.size_bytes)}
+                  </span>
                 </div>
-                <button
-                  type="button"
-                  onClick={() => void onDelete(r.id)}
-                  className="mono-label text-ink-muted hover:text-urgent transition-colors shrink-0"
-                  title="Remove attachment"
-                >
-                  ✕
-                </button>
-              </li>
-            );
-          })}
+                <p className="text-ink-slate truncate mt-0.5">
+                  {(r.text_preview || "").slice(0, 140)}
+                  {r.text_preview && r.text_preview.length > 140 ? "…" : ""}
+                </p>
+              </div>
+              <button
+                type="button"
+                onClick={() => void onDelete(r.id)}
+                className="mono-label text-ink-muted hover:text-urgent transition-colors shrink-0"
+                title="Remove attachment"
+              >
+                ✕
+              </button>
+            </li>
+          ))}
         </ul>
       )}
     </div>

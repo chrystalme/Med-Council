@@ -27,7 +27,14 @@ apps/web/.clerk/
 docs/
 scripts/
 apps/api/docs/
-apps/api/scripts/
+# The blanket `scripts/` above matches any `scripts/` directory in the tree,
+# including `apps/api/scripts/`. Un-ignore that directory so team-facing
+# helpers (get_env.sh, migrate_sqlite_to_postgres.py) can live there, then
+# ignore the local-only demo/gif generators individually.
+!apps/api/scripts/
+apps/api/scripts/generate_demo_ui_gif.py
+apps/api/scripts/generate_pipeline_gif.py
+apps/api/scripts/__pycache__/
 
 # ─── Node / Next.js ──────────────────────────────────────────────
 node_modules/

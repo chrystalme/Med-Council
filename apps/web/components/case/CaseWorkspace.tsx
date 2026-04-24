@@ -2,7 +2,51 @@
 
 import { useAuth } from '@clerk/nextjs';
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { councilJson } from '@/lib/council-api';
+import { councilJson, CouncilApiError } from '@/lib/council-api';
+
+/**
+ * Turn any thrown value from a council API call into a human-readable,
+ * stage-aware error message. Structured `CouncilApiError` codes get specific
+ * copy that tells the user what to try next (switch model, wait, upgrade…)
+ * instead of leaking provider stack traces as a "Fault" banner.
+ */
+function formatCouncilError(e: unknown, stageLabel: string): string {
+  if (e instanceof CouncilApiError) {
+    const detail = e.detail;
+    const structured =
+      detail && typeof detail === 'object' && 'code' in detail
+        ? (detail as { code?: string; message?: string })
+        : null;
+    const code = structured?.code ?? e.code;
+    const message = structured?.message;
+
+    if (code === 'bad_model') {
+      return (
+        (message ?? 'The selected model was rejected by the provider.') +
+        ' Pick another model from the selector at the top of the page and click the stage again.'
+      );
+    }
+    if (code === 'groq_not_configured') {
+      return (
+        message ??
+        'Free-tier model is unavailable (server misconfigured). Pick a Pro model or try again later.'
+      );
+    }
+    if (code === 'provider_unavailable') {
+      return (
+        (message ?? 'The model provider is temporarily unavailable.') +
+        ' Try again in a moment, or switch to a different model.'
+      );
+    }
+    if (code === 'consultation_cap' || code === 'attachment_size' || code === 'voice_premium') {
+      // Upgrade-modal codes are already handled upstream; just surface the message.
+      return message ?? `${stageLabel} failed.`;
+    }
+    return message ?? `${stageLabel} failed (HTTP ${e.status}).`;
+  }
+  if (e instanceof Error) return e.message;
+  return `${stageLabel} failed.`;
+}
 import { PaywallBanner } from './PaywallBanner';
 import { Markdown } from './Markdown';
 import { ConsensusView } from './ConsensusView';
@@ -39,6 +83,7 @@ type CaseState = {
 };
 
 const LS_CASE = 'medai_case_id';
+const LS_SAVED_CONSULTATION_FOR_CASE = 'medai_consultation_saved_for';
 
 function parseNumberedQuestions(text: string): string[] {
   return text
@@ -201,13 +246,48 @@ export function CaseWorkspace() {
         const s = row.state;
         if (s && typeof s === 'object') {
           const restored = typeof s.step === 'number' ? s.step : 0;
+
+          // Presence-of-output drives which stages we consider "already done".
+          // Saved-step alone is unreliable (a stage auto-advances before its
+          // next-stage effect resolves), and using `restored > i` leaves the
+          // user's current stage's flag = false, re-firing the stage on refresh.
+          const hasPhysicians  = Array.isArray(s.physicians) && s.physicians.length > 0;
+          const hasResearch    = Array.isArray(s.research)    && s.research.length > 0;
+          const hasConsensus   = !!s.consensus;
+          const hasPlan        = typeof s.plan === 'string'    && s.plan.trim().length > 0;
+          const hasMessage     = typeof s.message === 'string' && s.message.trim().length > 0;
+
+          autoRunRef.current[2] = hasPhysicians;
+          autoRunRef.current[3] = hasResearch;
+          autoRunRef.current[4] = hasConsensus;
+          autoRunRef.current[5] = hasPlan;
+          autoRunRef.current[6] = hasMessage;
+
+          // maxStep = the furthest stage the user has actually reached. If the
+          // message is saved we've completed step 6 → reached step 7 (review).
+          // Without this, `maxStep` stays at `restored` and the auto-run guard
+          // `step !== maxStep` can flip false when the user clicks back, which
+          // teleports them forward again through the idempotent paths.
+          let computedMax = restored;
+          if (hasPhysicians) computedMax = Math.max(computedMax, 3);
+          if (hasResearch)   computedMax = Math.max(computedMax, 4);
+          if (hasConsensus)  computedMax = Math.max(computedMax, 5);
+          if (hasPlan)       computedMax = Math.max(computedMax, 6);
+          if (hasMessage)    computedMax = Math.max(computedMax, 7);
           setStep(restored);
-          setMaxStep(restored);
-          // Mark all reached auto-run stages as already done, so re-visiting
-          // a completed stage never re-fires a network call.
-          for (const i of [2, 3, 4, 5, 6] as const) {
-            if (restored > i) autoRunRef.current[i] = true;
+          setMaxStep(computedMax);
+
+          // Did we already post the consultation for this case? The ref is
+          // in-memory only, so a refresh used to re-POST on reaching step 7
+          // → duplicate patient-memory rows. Persist a localStorage sentinel
+          // so the post stays idempotent across reloads.
+          try {
+            const savedFor = localStorage.getItem(LS_SAVED_CONSULTATION_FOR_CASE);
+            if (savedFor === id) consultationSavedRef.current = id;
+          } catch {
+            /* ignore */
           }
+
           setSymptoms(s.symptoms ?? '');
           setFqLines(Array.isArray(s.fqLines) ? s.fqLines : []);
           setFqAnswers(
@@ -285,7 +365,7 @@ export function CaseWorkspace() {
       await ensureCase();
       advanceTo(1);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Intake failed');
+      setErr(formatCouncilError(e, 'Intake'));
     } finally {
       setBusy(null);
     }
@@ -313,7 +393,7 @@ export function CaseWorkspace() {
       autoRunRef.current = { 2: false, 3: false, 4: false, 5: false, 6: false };
       advanceTo(2);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Expert selection failed');
+      setErr(formatCouncilError(e, 'Expert selection'));
     } finally {
       setBusy(null);
     }
@@ -322,7 +402,6 @@ export function CaseWorkspace() {
   const runCouncil = async () => {
     setErr(null);
     setBusy('Running specialist deliberation…');
-    const tok = await tokenFn();
     const roster = councilRoster.length ? councilRoster : [];
     const ctx = [
       deliberationCaseSummary && `Case summary: ${deliberationCaseSummary}`,
@@ -337,6 +416,12 @@ export function CaseWorkspace() {
     try {
       for (const p of roster) {
         setBusy(`Consulting ${p.name}…`);
+        // Fetch a fresh Clerk token per specialist — each LLM call can take
+        // 10–30s and Clerk's default session JWT TTL is 60s, so a token
+        // captured before the loop would expire by specialist 3 or 4.
+        // `getToken()` is cached inside Clerk; it only hits the network when
+        // the cached token has less than ~10s left.
+        const tok = await tokenFn();
         const prior = out.map(x => ({
           name: x.name,
           specialty: x.specialty,
@@ -366,7 +451,7 @@ export function CaseWorkspace() {
       setPhysicians(out);
       advanceTo(3);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Council failed');
+      setErr(formatCouncilError(e, 'Council'));
     } finally {
       setBusy(null);
     }
@@ -399,7 +484,7 @@ export function CaseWorkspace() {
       setParseWarning(data.parse_warning ?? '');
       advanceTo(4);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Research failed');
+      setErr(formatCouncilError(e, 'Research'));
     } finally {
       setBusy(null);
     }
@@ -432,7 +517,7 @@ export function CaseWorkspace() {
       setConsensus(data.consensus ?? null);
       advanceTo(5);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Consensus failed');
+      setErr(formatCouncilError(e, 'Consensus'));
     } finally {
       setBusy(null);
     }
@@ -468,7 +553,7 @@ export function CaseWorkspace() {
       setPlan(data.plan ?? '');
       advanceTo(6);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Plan failed');
+      setErr(formatCouncilError(e, 'Plan'));
     } finally {
       setBusy(null);
     }
@@ -493,7 +578,7 @@ export function CaseWorkspace() {
       setMessage(data.message ?? '');
       advanceTo(7);
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Message failed');
+      setErr(formatCouncilError(e, 'Message'));
     } finally {
       setBusy(null);
     }
@@ -554,6 +639,13 @@ export function CaseWorkspace() {
           attachment_texts: attachmentTexts,
         }),
       });
+      // Persist the "already saved" sentinel so a page refresh doesn't
+      // re-POST the consultation and create a duplicate record.
+      try {
+        localStorage.setItem(LS_SAVED_CONSULTATION_FOR_CASE, caseId);
+      } catch {
+        /* ignore */
+      }
       setConsultationSaveError(null);
     } catch (e) {
       consultationSavedRef.current = null;  // allow retry
@@ -625,7 +717,7 @@ export function CaseWorkspace() {
       );
       setFollowupReply(data.reply ?? '');
     } catch (e) {
-      setErr(e instanceof Error ? e.message : 'Follow-up failed');
+      setErr(formatCouncilError(e, 'Follow-up'));
     } finally {
       setBusy(null);
     }
@@ -633,6 +725,7 @@ export function CaseWorkspace() {
 
   const reset = () => {
     localStorage.removeItem(LS_CASE);
+    localStorage.removeItem(LS_SAVED_CONSULTATION_FOR_CASE);
     setCaseId(null);
     consultationSavedRef.current = null;
     setConsultationSaveError(null);
@@ -709,6 +802,7 @@ export function CaseWorkspace() {
                     if (reachable && !busy) setStep(i);
                   }}
                   disabled={!reachable || !!busy}
+                  suppressHydrationWarning
                   aria-current={i === step ? 'step' : undefined}
                   aria-label={`Stage ${stage.numeral} — ${stage.label}${reachable ? '' : ' (not yet reached)'}`}
                   className={[
@@ -772,9 +866,22 @@ export function CaseWorkspace() {
         </div>
       )}
       {busy && (
-        <div className='flex items-center gap-3 py-2'>
-          <span className='h-1.5 w-1.5 rounded-full bg-cornflower atlas-pulse' />
-          <p className='mono-label text-ink-muted atlas-pulse'>{busy}</p>
+        <div
+          role='status'
+          aria-live='polite'
+          className='rounded-xl border border-line bg-paper-deep/50 p-4 space-y-3'
+        >
+          <div className='stage-progress' aria-hidden />
+          <div className='flex items-center gap-3'>
+            <span className='stage-spinner' aria-hidden />
+            <p className='mono-label text-ink-muted'>{busy}</p>
+            <span className='sr-only'>Please wait — the council is working.</span>
+          </div>
+          <div className='space-y-2 pt-1'>
+            <span className='skeleton h-3 w-3/4' aria-hidden />
+            <span className='skeleton h-3 w-5/6' aria-hidden />
+            <span className='skeleton h-3 w-2/3' aria-hidden />
+          </div>
         </div>
       )}
 
@@ -827,9 +934,14 @@ export function CaseWorkspace() {
               </h3>
               <p className='text-[15px] text-ink-slate max-w-[56ch]'>
                 The council drafted these from your intake. Answer what you can;
-                blanks are fine.
+                blanks are fine. If you already have test results, attach them
+                below — one document covers every question.
               </p>
             </div>
+            <TestAttachment
+              caseId={caseId}
+              onPaywallError={upgrade.show}
+            />
             <ol className='space-y-5 counter-reset-[q]'>
               {fqLines.map((q, i) => (
                 <li
@@ -875,11 +987,6 @@ export function CaseWorkspace() {
                 </li>
               ))}
             </ol>
-            <TestAttachment
-              caseId={caseId}
-              questionOptions={fqLines}
-              onPaywallError={upgrade.show}
-            />
             <button
               type='button'
               className='btn-indigo'

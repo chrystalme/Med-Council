@@ -36,7 +36,7 @@ export default function RootLayout({
       lang="en"
       className={`${instrumentSans.variable} ${jetbrainsMono.variable} ${fraunces.variable} h-full antialiased`}
     >
-      <body className="min-h-full">
+      <body className="min-h-full" suppressHydrationWarning>
         <ClerkProvider>{children}</ClerkProvider>
       </body>
     </html>

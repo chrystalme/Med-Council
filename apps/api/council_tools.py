@@ -4,10 +4,11 @@ MedAI Council — Function tools attached to coordinator agents (catalog lookup,
 
 from __future__ import annotations
 
-import sqlite3
 from datetime import datetime, timezone
 
 from agents import function_tool
+
+import db as _db
 
 from council_registry import SPECIALIST_META
 
@@ -36,21 +37,24 @@ def get_specialist_catalog() -> str:
     ),
 )
 def save_feedback(rating: str, comment: str, symptoms: str, diagnosis: str) -> str:
-    """Persist a feedback row to SQLite and return confirmation."""
+    """Persist a feedback row via the configured DB and return confirmation."""
     if rating not in ("up", "down"):
         return "ERROR: rating must be 'up' or 'down'."
-    import os
-    from pathlib import Path
-    on_vercel = bool(os.environ.get("VERCEL"))
-    db_path = Path("/tmp/feedback.db") if on_vercel else Path(__file__).resolve().parent / "feedback.db"
-    con = sqlite3.connect(str(db_path))
-    con.execute(
-        "INSERT INTO feedback (rating, comment, symptoms, diagnosis, created_at) VALUES (?, ?, ?, ?, ?)",
-        (rating, (comment or "").strip()[:2000], (symptoms or "")[:500], (diagnosis or "")[:500],
-         datetime.now(timezone.utc).isoformat()),
-    )
-    con.commit()
-    con.close()
+    con = _db.connect()
+    try:
+        con.execute(
+            "INSERT INTO feedback (rating, comment, symptoms, diagnosis, created_at) VALUES (%s, %s, %s, %s, %s)",
+            (
+                rating,
+                (comment or "").strip()[:2000],
+                (symptoms or "")[:500],
+                (diagnosis or "")[:500],
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        con.commit()
+    finally:
+        con.close()
     return f"Feedback saved: rating={rating}"
 
 

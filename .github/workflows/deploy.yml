@@ -1,0 +1,112 @@
+name: Deploy (GCP)
+
+# Manual trigger. Builds the api image, pushes it to Artifact Registry, then
+# runs `terraform apply` to roll Cloud Run onto the new image.
+#
+# All workflow inputs and github-context values are passed through `env:`
+# before being referenced in `run:` — no direct `${{ ... }}` interpolation
+# into shell commands, per GitHub Actions injection guidance.
+#
+# Required repo-level secrets / vars (one-time setup):
+#   secrets.GCP_WORKLOAD_IDENTITY_PROVIDER — full WIF provider resource name
+#   secrets.GCP_DEPLOY_SA                  — service account email (deploy perms)
+#   vars.GCP_PROJECT_ID                    — project id
+#   vars.GCP_REGION                        — e.g. us-central1
+#   vars.GCP_TF_STATE_BUCKET               — GCS bucket backing terraform state
+on:
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Image tag to build and deploy. Leave blank to use the commit SHA.'
+        required: false
+        default: ''
+
+concurrency:
+  group: deploy-gcp
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  deploy:
+    name: Build, push, apply
+    runs-on: ubuntu-latest
+    environment: production
+    env:
+      PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
+      REGION: ${{ vars.GCP_REGION }}
+      TF_STATE_BUCKET: ${{ vars.GCP_TF_STATE_BUCKET }}
+      IMAGE_TAG_INPUT: ${{ github.event.inputs.image_tag }}
+      COMMIT_SHA: ${{ github.sha }}
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Resolve image tag
+        run: |
+          if [ -n "$IMAGE_TAG_INPUT" ]; then
+            RESOLVED_TAG="$IMAGE_TAG_INPUT"
+          else
+            RESOLVED_TAG="$COMMIT_SHA"
+          fi
+          echo "RESOLVED_TAG=$RESOLVED_TAG" >> "$GITHUB_ENV"
+          echo "Resolved image tag: $RESOLVED_TAG"
+
+      - name: Auth to GCP
+        uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_DEPLOY_SA }}
+          token_format: access_token
+
+      - name: Set up gcloud
+        uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+
+      - name: Configure Docker for Artifact Registry
+        run: gcloud auth configure-docker "${REGION}-docker.pkg.dev" --quiet
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Build and push api image
+        uses: docker/build-push-action@v6
+        with:
+          context: apps/api
+          file: apps/api/Dockerfile
+          push: true
+          platforms: linux/amd64
+          tags: |
+            ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/medai/api:${{ env.RESOLVED_TAG }}
+            ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/medai/api:latest
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Set up Terraform
+        uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: 1.9.0
+
+      - name: Terraform init
+        working-directory: terraform
+        run: terraform init -backend-config="bucket=${TF_STATE_BUCKET}" -input=false
+
+      - name: Terraform apply
+        working-directory: terraform
+        run: |
+          terraform apply -input=false -auto-approve \
+            -var="project_id=${PROJECT_ID}" \
+            -var="region=${REGION}" \
+            -var="image_tag=${RESOLVED_TAG}"
+
+      - name: Report service URL
+        working-directory: terraform
+        run: |
+          URL="$(terraform output -raw service_url 2>/dev/null || echo 'n/a')"
+          {
+            echo "### Deployment"
+            echo "- image: \`${REGION}-docker.pkg.dev/${PROJECT_ID}/medai/api:${RESOLVED_TAG}\`"
+            echo "- service URL: ${URL}"
+          } >> "$GITHUB_STEP_SUMMARY"

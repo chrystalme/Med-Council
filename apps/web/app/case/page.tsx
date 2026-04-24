@@ -65,12 +65,9 @@ export default async function CaseWorkspacePage() {
               </h1>
 
               <p className="text-[1.0625rem] text-ink-slate max-w-[52ch] leading-relaxed text-pretty">
-                Walk the full pipeline here. The API runs separately (see
-                README); ensure{" "}
-                <code className="font-mono text-[13px] text-ink-muted bg-paper-deep px-1.5 py-0.5 rounded">
-                  NEXT_PUBLIC_API_BASE_URL
-                </code>{" "}
-                points at your FastAPI host.
+                Describe the symptoms, attach any test results, and the council
+                will deliberate — triage, per-specialist assessment, literature
+                scan, consensus, and a plan — all on this plate.
               </p>
             </div>
 
