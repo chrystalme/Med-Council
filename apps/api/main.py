@@ -71,6 +71,7 @@ from council_schemas import (
     parse_intake_followup_text,
     parse_research_papers,
 )
+from consultation_memory import build_consultation_memory_text
 
 from council import (
     ALL_SPECIALIST_IDS,
@@ -160,6 +161,18 @@ def _truncate(text: str, max_len: int = 120) -> str:
     """Truncate text for trace metadata (keeps traces searchable without bloating)."""
     t = (text or "").strip()
     return t[:max_len] + "…" if len(t) > max_len else t
+
+
+def _json_object(raw: Any) -> dict[str, Any]:
+    if isinstance(raw, dict):
+        return raw
+    if isinstance(raw, str):
+        try:
+            parsed = json.loads(raw or "{}")
+        except json.JSONDecodeError:
+            return {}
+        return parsed if isinstance(parsed, dict) else {}
+    return {}
 
 
 def _flush_sdk_traces() -> None:
@@ -1397,7 +1410,7 @@ async def council_physician(
 
     ctx = _council_context_block(req.council_context)
     memory = _retrieve_patient_context(_cases_user_id(user), req.symptoms)
-    attachments_block = _attachment_block_for_case(req.case_id) if req.case_id else ""
+    attachments_block = _attachment_block_for_case(req.case_id, _cases_user_id(user)) if req.case_id else ""
     prompt = (
         f"Patient symptoms: {req.symptoms}\n\n"
         f"Patient follow-up responses: {req.followup_answers}"
@@ -1501,7 +1514,7 @@ async def consensus(
         for r in req.research
     )
     memory = _retrieve_patient_context(_cases_user_id(user), req.symptoms)
-    attachments_block = _attachment_block_for_case(req.case_id) if req.case_id else ""
+    attachments_block = _attachment_block_for_case(req.case_id, _cases_user_id(user)) if req.case_id else ""
     prompt = (
         f"Patient symptoms: {req.symptoms}\n\n"
         f"Follow-up responses: {req.followup_answers}\n\n"
@@ -1553,7 +1566,7 @@ async def plan(
         f"{a['name']} ({a['specialty']}):\n{a['assessment']}" for a in req.assessments
     )
     memory = _retrieve_patient_context(_cases_user_id(user), req.symptoms)
-    attachments_block = _attachment_block_for_case(req.case_id) if req.case_id else ""
+    attachments_block = _attachment_block_for_case(req.case_id, _cases_user_id(user)) if req.case_id else ""
     prompt = (
         f"Diagnosis: {json.dumps(req.consensus)}\n\n"
         f"Patient symptoms: {req.symptoms}\n\n"
@@ -1645,6 +1658,11 @@ async def patient_message_followup(
 # ─────────────────────────────────────────────────────────────────────────────
 
 FREE_CONSULTATION_CAP = 4
+MAX_RETRIEVED_CONSULTATION_CHARS = 4000
+MAX_RETRIEVE_DOCUMENT_CHARS = 4000
+MAX_CONSULTATION_ATTACHMENT_TEXTS = 20
+MAX_CONSULTATION_ATTACHMENT_TEXT_CHARS = 5000
+MAX_CONSULTATION_CASE_STATE_CHARS = 80000
 
 
 def _consultation_count(con, user_id: str) -> int:
@@ -1681,6 +1699,24 @@ class ConsultationSaveIn(BaseModel):
     urgency: str | None = None
     confidence: int | None = None
     attachment_texts: list[str] = Field(default_factory=list)
+    case_state: dict[str, Any] | None = None
+
+    @field_validator("attachment_texts")
+    @classmethod
+    def _bound_attachment_texts(cls, value: list[str]) -> list[str]:
+        if len(value) > MAX_CONSULTATION_ATTACHMENT_TEXTS:
+            raise ValueError("Too many attachment texts.")
+        return [str(text)[:MAX_CONSULTATION_ATTACHMENT_TEXT_CHARS] for text in value]
+
+    @field_validator("case_state")
+    @classmethod
+    def _bound_case_state(cls, value: dict[str, Any] | None) -> dict[str, Any] | None:
+        if value is None:
+            return None
+        encoded = json.dumps(value, ensure_ascii=False)
+        if len(encoded) > MAX_CONSULTATION_CASE_STATE_CHARS:
+            raise ValueError("Case state is too large.")
+        return value
 
 
 @app.post("/api/patient/consultations")
@@ -1703,16 +1739,31 @@ async def save_consultation(
 
     con = _get_db()
     try:
+        case_row = con.execute(
+            "SELECT state FROM cases WHERE id = %s AND user_id = %s",
+            (req.case_id, user_id),
+        ).fetchone()
+        if case_row is None:
+            raise HTTPException(status_code=404, detail="Case not found.")
+
         _assert_consultation_cap(con, user_id, plan)
 
         consultation_id = f"con_{uuid.uuid4().hex[:24]}"
         now = datetime.now(timezone.utc).isoformat()
+        case_state = req.case_state if req.case_state is not None else _json_object(case_row["state"])
+        case_state_json = json.dumps(case_state, ensure_ascii=False)
+
+        if req.case_state is not None:
+            con.execute(
+                "UPDATE cases SET state = %s, updated_at = %s WHERE id = %s AND user_id = %s",
+                (case_state_json, now, req.case_id, user_id),
+            )
 
         con.execute(
             """
             INSERT INTO consultations
-              (id, user_id, case_id, summary, primary_dx, icd_code, urgency, confidence, created_at)
-            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s)
+              (id, user_id, case_id, summary, primary_dx, icd_code, urgency, confidence, case_state, created_at)
+            VALUES (%s,%s,%s,%s,%s,%s,%s,%s,%s::jsonb,%s)
             """,
             (
                 consultation_id,
@@ -1723,23 +1774,24 @@ async def save_consultation(
                 req.icd_code,
                 req.urgency,
                 req.confidence,
+                case_state_json,
                 now,
             ),
         )
         con.commit()
 
-        # Build embedding input from summary + diagnosis + attachment text.
-        embed_text = "\n\n".join(
-            chunk for chunk in [
-                req.summary,
-                f"Primary diagnosis: {req.primary_dx}" if req.primary_dx else "",
-                "\n".join(t for t in req.attachment_texts if t),
-            ]
-            if chunk
+        memory_text = build_consultation_memory_text(
+            summary=req.summary,
+            primary_dx=req.primary_dx,
+            icd_code=req.icd_code,
+            urgency=req.urgency,
+            confidence=req.confidence,
+            attachment_texts=req.attachment_texts,
+            case_state=case_state,
         )
 
         try:
-            vec = get_embedding_provider().embed(embed_text)
+            vec = get_embedding_provider().embed(memory_text)
             get_vector_store().upsert(
                 con,
                 id=consultation_id,
@@ -1752,7 +1804,7 @@ async def save_consultation(
                     "urgency": req.urgency or "",
                     "confidence": req.confidence or 0,
                 },
-                document=req.summary[:4000],
+                document=memory_text,
             )
         except Exception as exc:
             log.warning("embedding/vector upsert failed; consultation saved without retrieval: %s", exc)
@@ -1856,7 +1908,11 @@ async def retrieve_consultations(
                     "id": h.id,
                     "score": round(h.score, 4),
                     "metadata": h.metadata,
-                    "document": h.document,
+                    "document": (
+                        h.document[:MAX_RETRIEVE_DOCUMENT_CHARS].rstrip() + "\n[truncated]"
+                        if len(h.document) > MAX_RETRIEVE_DOCUMENT_CHARS
+                        else h.document
+                    ),
                 }
                 for h in hits
             ]
@@ -1882,10 +1938,10 @@ async def get_consultation(
         row = con.execute(
             """
             SELECT c.id, c.case_id, c.user_id, c.summary, c.primary_dx, c.icd_code,
-                   c.urgency, c.confidence, c.created_at,
+                   c.urgency, c.confidence, c.case_state AS consultation_state, c.created_at,
                    cs.state AS case_state, cs.title AS case_title
             FROM consultations c
-            LEFT JOIN cases cs ON cs.id = c.case_id
+            LEFT JOIN cases cs ON cs.id = c.case_id AND cs.user_id = c.user_id
             WHERE c.id = %s
             """,
             (consultation_id,),
@@ -1893,14 +1949,7 @@ async def get_consultation(
         if row is None or (row["user_id"] or "") != user_id:
             raise HTTPException(status_code=404, detail="Consultation not found.")
 
-        raw_state = row["case_state"]
-        if isinstance(raw_state, str):
-            try:
-                case_state = json.loads(raw_state or "{}")
-            except json.JSONDecodeError:
-                case_state = {}
-        else:
-            case_state = raw_state or {}
+        case_state = _json_object(row["consultation_state"]) or _json_object(row["case_state"])
 
         created_at = row["created_at"]
         return {
@@ -1981,9 +2030,11 @@ def _retrieve_patient_context(user_id: str, query: str, top_k: int = 3) -> str:
             urgency = meta.get("urgency") or ""
             conf = meta.get("confidence") or 0
             score_pct = int(round(h.score * 100))
-            summary = (h.document or "")[:600].replace("\n", " ")
+            document = (h.document or "").strip()
+            if len(document) > MAX_RETRIEVED_CONSULTATION_CHARS:
+                document = document[:MAX_RETRIEVED_CONSULTATION_CHARS].rstrip() + "\n[truncated]"
             lines.append(
-                f"[{date} · {dx} (confidence {conf}%, {urgency}) · match {score_pct}%]\n{summary}"
+                f"[{date} · {dx} (confidence {conf}%, {urgency}) · match {score_pct}%]\n{document}"
             )
         lines.append("---")
         return "\n\n".join(lines)
@@ -1996,13 +2047,30 @@ def _retrieve_patient_context(user_id: str, query: str, top_k: int = 3) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _attachment_block_for_case(case_id: str, question_texts: list[str] | None = None) -> str:
+def _attachment_block_for_case(
+    case_id: str,
+    user_id: str,
+    question_texts: list[str] | None = None,
+) -> str:
     """Read attachments for a case and render as a prompt-safe text block."""
     from attachments import format_attachment_block, get_attachment_store
 
+    if not user_id:
+        return ""
+
     con = _get_db()
     try:
-        rows = get_attachment_store().list_for_case(con, case_id)
+        case_row = con.execute(
+            "SELECT id FROM cases WHERE id = %s AND user_id = %s",
+            (case_id, user_id),
+        ).fetchone()
+        if case_row is None:
+            return ""
+        rows = [
+            row
+            for row in get_attachment_store().list_for_case(con, case_id)
+            if row.user_id == user_id
+        ]
     except NotImplementedError:
         return ""
     finally:

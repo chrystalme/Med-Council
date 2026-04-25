@@ -54,6 +54,7 @@ def upgrade() -> None:
             icd_code     TEXT,
             urgency      TEXT,
             confidence   INTEGER,
+            case_state   JSONB       NOT NULL DEFAULT '{}'::jsonb,
             created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         """

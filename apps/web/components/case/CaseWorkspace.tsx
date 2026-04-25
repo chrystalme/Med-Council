@@ -637,6 +637,21 @@ export function CaseWorkspace() {
               ? consensus.confidence
               : null,
           attachment_texts: attachmentTexts,
+          case_state: {
+            step,
+            symptoms,
+            fqLines,
+            fqAnswers,
+            councilRoster,
+            deliberationCaseSummary,
+            deliberationFocusAreas,
+            deliberationReason,
+            physicians,
+            research,
+            consensus,
+            plan,
+            message,
+          },
         }),
       });
       // Persist the "already saved" sentinel so a page refresh doesn't
@@ -652,7 +667,24 @@ export function CaseWorkspace() {
       setConsultationSaveError(e instanceof Error ? e.message : 'Save failed');
       upgrade.show(e);
     }
-  }, [caseId, consensus, message, plan, symptoms, tokenFn, upgrade]);
+  }, [
+    caseId,
+    consensus,
+    councilRoster,
+    deliberationCaseSummary,
+    deliberationFocusAreas,
+    deliberationReason,
+    fqAnswers,
+    fqLines,
+    message,
+    physicians,
+    plan,
+    research,
+    step,
+    symptoms,
+    tokenFn,
+    upgrade,
+  ]);
 
   useEffect(() => {
     if (step === 7 && consensus && caseId && !consultationSaveError) {
