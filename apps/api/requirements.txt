@@ -132,7 +132,7 @@ openai==2.32.0
     # via
     #   medai-council-api
     #   openai-agents
-openai-agents==0.14.3
+openai-agents==0.14.6
     # via medai-council-api
 openinference-instrumentation==0.1.47
     # via openinference-instrumentation-openai-agents
