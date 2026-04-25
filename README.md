@@ -268,7 +268,7 @@ See `terraform/README.md` for first-time setup and secret population.
 - [x] **Step 2a** — monorepo restructure + Next.js scaffold + Clerk auth gate
 - [x] **Step 2b–d** — seven pipeline stages in `/case` (`CaseWorkspace` → FastAPI)
 - [x] **Step 3** — case autosave via SQLite `cases` table + `/api/cases` _(migrating to Postgres)_
-- [x] **Step 4** — on-call email via Resend when consensus urgency is high _(needs `RESEND\__` env)\*
+- [x] **Step 4** — on-call email via Resend when consensus urgency is high \_(needs `RESEND\__` env)\*
 - [x] **Step 5** — optional `RATE_LIMIT_ENABLED` sliding window on `POST /api/*` _(SSE / parallel fan-out still open)_
 - [x] **Step 6** — paywall banner placeholder (`NEXT_PUBLIC_FEATURE_PAYWALL=1`) _(Stripe later)_
 - [ ] **Step 7** — GCP migration (Cloud Run + Cloud SQL + GCS)
