@@ -1,8 +1,6 @@
-// When NEXT_PUBLIC_API_BASE_URL is explicitly set we target the backend directly
-// (useful for server-side tools, mobile clients, etc). Otherwise we issue
-// same-origin requests and rely on Next.js rewrites (next.config.ts) to
-// forward /api/* to the FastAPI backend — that avoids CORS and keeps the
-// browser address bar usable for quick checks (e.g. opening /api/me).
+// When NEXT_PUBLIC_API_BASE_URL is set, browser calls target FastAPI directly.
+// Production uses this to avoid the Next rewrite proxy's ~30s timeout on long
+// council stages. Local/docker dev can leave it empty and rely on rewrites.
 const base = () =>
   (typeof process !== "undefined" && process.env.NEXT_PUBLIC_API_BASE_URL) ||
   "";

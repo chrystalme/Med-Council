@@ -1,8 +1,8 @@
 import type { NextConfig } from "next";
 import path from "node:path";
 
-// FastAPI origin. Local default :8000; in prod, set NEXT_PUBLIC_API_BASE_URL
-// (and API_BASE_URL) to the deployed backend URL so rewrites proxy there.
+// FastAPI origin for rewrite fallback. Production browser calls use
+// NEXT_PUBLIC_API_BASE_URL directly to avoid proxy timeouts on long stages.
 const API_ORIGIN =
   process.env.API_BASE_URL ||
   process.env.NEXT_PUBLIC_API_BASE_URL ||

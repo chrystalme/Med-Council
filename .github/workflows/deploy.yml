@@ -110,7 +110,7 @@ jobs:
           push: true
           platforms: linux/amd64
           build-args: |
-            NEXT_PUBLIC_API_BASE_URL=
+            NEXT_PUBLIC_API_BASE_URL=${{ env.API_BASE_URL }}
             API_BASE_URL=${{ env.API_BASE_URL }}
             NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
           tags: |
