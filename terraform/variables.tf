@@ -15,6 +15,12 @@ variable "service_name" {
   default     = "medai-api"
 }
 
+variable "env_suffix" {
+  description = "Suffix appended to default resource names so envs can share a project (e.g. '-dev'). Empty for prod."
+  type        = string
+  default     = ""
+}
+
 variable "ar_repo" {
   description = "Artifact Registry repo name (Docker format)."
   type        = string
