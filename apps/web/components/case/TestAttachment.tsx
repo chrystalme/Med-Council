@@ -36,10 +36,12 @@ function humanSize(bytes: number): string {
  */
 export function TestAttachment({
   caseId,
+  disabled = false,
   onChange,
   onPaywallError,
 }: {
   caseId: string | null;
+  disabled?: boolean;
   onChange?: () => void;
   onPaywallError?: (err: unknown) => void;
 }) {
@@ -77,6 +79,7 @@ export function TestAttachment({
 
   const uploadForm = useCallback(
     async (fd: FormData) => {
+      if (disabled) return;
       if (!caseId) {
         setErr("Save the case first before attaching.");
         return;
@@ -119,7 +122,7 @@ export function TestAttachment({
         onPaywallError?.(e);
       }
     },
-    [caseId, getToken, onChange, onPaywallError, refresh]
+    [caseId, disabled, getToken, onChange, onPaywallError, refresh]
   );
 
   const onFileChange = useCallback(
@@ -158,6 +161,7 @@ export function TestAttachment({
   const onDelete = useCallback(
     async (id: string) => {
       if (!caseId) return;
+      if (disabled) return;
       try {
         const tok = await getToken().catch(() => null);
         await councilJson(`/api/cases/${caseId}/attachments/${id}`, {
@@ -170,7 +174,7 @@ export function TestAttachment({
         /* ignore */
       }
     },
-    [caseId, getToken, onChange, refresh]
+    [caseId, disabled, getToken, onChange, refresh]
   );
 
   const totalBytes = rows.reduce((n, r) => n + (r.size_bytes || 0), 0);
@@ -203,7 +207,7 @@ export function TestAttachment({
         <label
           className={[
             "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full border text-[13px] cursor-pointer transition-colors",
-            caseId
+            caseId && !disabled
               ? "border-line-strong text-ink-muted hover:border-indigo hover:text-indigo"
               : "border-line text-ink-faint opacity-60 cursor-not-allowed",
           ].join(" ")}
@@ -214,7 +218,7 @@ export function TestAttachment({
             type="file"
             accept={ACCEPT}
             className="hidden"
-            disabled={!caseId}
+            disabled={!caseId || disabled}
             onChange={onFileChange}
           />
         </label>
@@ -232,7 +236,7 @@ export function TestAttachment({
       <textarea
         className="field min-h-[60px] text-[13.5px]"
         placeholder="Or paste the test values here (auto-saves after a short pause)…"
-        disabled={!caseId}
+        disabled={!caseId || disabled}
         value={pasted}
         onChange={(e) => onPasteChange(e.target.value)}
       />
@@ -263,6 +267,7 @@ export function TestAttachment({
               <button
                 type="button"
                 onClick={() => void onDelete(r.id)}
+                disabled={disabled}
                 className="mono-label text-ink-muted hover:text-urgent transition-colors shrink-0"
                 title="Remove attachment"
               >

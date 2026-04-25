@@ -798,6 +798,8 @@ export function CaseWorkspace() {
   };
 
   const currentStage = STAGES[step] ?? STAGES[STAGES.length - 1];
+  const consultationComplete = maxStep >= 7 && message.trim().length > 0;
+  const pipelineLocked = consultationComplete;
 
   return (
     <div className='space-y-10'>
@@ -812,8 +814,13 @@ export function CaseWorkspace() {
             <ModelSelector
               value={modelKey}
               onChange={setModelKey}
-              disabled={!!busy}
+              disabled={!!busy || pipelineLocked}
             />
+            {pipelineLocked && (
+              <span className='mono-label text-ink-faint'>
+                complete <span className='diamond' /> model locked
+              </span>
+            )}
           </div>
           <button
             type='button'
@@ -937,7 +944,7 @@ export function CaseWorkspace() {
               </label>
               <VoiceInput
                 label='Dictate symptoms'
-                disabled={!!busy}
+                disabled={!!busy || pipelineLocked}
                 onPaywallError={upgrade.show}
                 onTranscript={(t) =>
                   setSymptoms((s) => (s ? `${s.trimEnd()} ${t}` : t))
@@ -953,12 +960,13 @@ export function CaseWorkspace() {
               className='field min-h-[180px]'
               placeholder='e.g. 54-year-old, sudden onset left-sided chest pressure radiating to jaw, diaphoretic, began 40 minutes ago…'
               value={symptoms}
+              disabled={pipelineLocked}
               onChange={e => setSymptoms(e.target.value)}
             />
             <button
               type='button'
               className='btn-indigo'
-              disabled={!symptoms.trim() || !!busy}
+              disabled={!symptoms.trim() || !!busy || pipelineLocked}
               onClick={() => void runIntake()}
             >
               Generate follow-up questions
@@ -981,6 +989,7 @@ export function CaseWorkspace() {
             </div>
             <TestAttachment
               caseId={caseId}
+              disabled={pipelineLocked}
               onPaywallError={upgrade.show}
             />
             <ol className='space-y-5 counter-reset-[q]'>
@@ -1002,6 +1011,7 @@ export function CaseWorkspace() {
                     className='field min-h-[88px]'
                     placeholder='Your answer…'
                     value={fqAnswers[i] ?? ''}
+                    disabled={pipelineLocked}
                     onChange={e => {
                       setFqAnswers(prev => {
                         const n = [...prev];
@@ -1013,7 +1023,7 @@ export function CaseWorkspace() {
                   <div className='flex justify-end'>
                     <VoiceInput
                       label={`Dictate answer to Q${i + 1}`}
-                      disabled={!!busy}
+                      disabled={!!busy || pipelineLocked}
                       onPaywallError={upgrade.show}
                       onTranscript={(t) =>
                         setFqAnswers((prev) => {
@@ -1031,7 +1041,7 @@ export function CaseWorkspace() {
             <button
               type='button'
               className='btn-indigo'
-              disabled={!!busy}
+              disabled={!!busy || pipelineLocked}
               onClick={() => void runDeliberation()}
             >
               Select the council

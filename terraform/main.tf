@@ -361,10 +361,8 @@ resource "google_cloud_run_v2_service" "web" {
       # runtime env of the same name would be dead-letter and also create a
       # terraform cycle with the api service (which now redirects / → web).
 
-      # Client-side base is intentionally empty: `councilFetch` passes paths
-      # that already start with `/api/...`, so prepending anything here would
-      # double-prefix (saw `/api/api/me` → 404 during bootstrap). Same-origin
-      # calls are forwarded to API_BASE_URL by the Next rewrite in next.config.ts.
+      # Baked into the browser bundle at image-build time by the deploy
+      # workflow. Runtime value is informational for the standalone server.
       env {
         name  = "NEXT_PUBLIC_API_BASE_URL"
         value = ""
