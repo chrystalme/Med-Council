@@ -52,70 +52,45 @@ numpy, why OpenRouter + Groq side-by-side, why Cloud Run over Vercel, etc.).
 
 ```mermaid
 flowchart TB
-  subgraph Client["Browser — Next.js 16 app (Cloud Run or Firebase Hosting)"]
-    UI[CaseWorkspace · PatientFile · ConsultationDetail]
-    Clerk[Clerk auth widget]
-    UI --> Clerk
+  User([🧑‍⚕️ Patient / Clinician]):::user
+
+  Web["🌐 Next.js web app<br/>Clerk auth"]:::frontend
+  API["⚡ FastAPI backend<br/>JWT · rate limit · routes"]:::backend
+
+  subgraph Agents["🧠 Council pipeline"]
+    direction TB
+    Stage1["📝 Intake → 🚦 Triage"]:::agent
+    Stage2["👥 16 specialists + 🔬 PubMed research"]:::agent
+    Stage3["⚖️ Consensus — <i>LLM-as-judge</i><br/>ICD · urgency · confidence"]:::judge
+    Stage4["📋 Plan → 💬 Patient message"]:::agent
+    Stage1 --> Stage2 --> Stage3 --> Stage4
   end
 
-  subgraph Edge["Edge / routing"]
-    Rewrite["/api/* rewrite<br/>(next.config.ts)"]
+  LLM["🤖 LLM providers<br/>Groq · OpenRouter"]:::llm
+  External["🌍 PubMed · 📧 Resend email"]:::ext
+
+  subgraph Storage["💾 Stateful layer"]
+    direction LR
+    PG[("🐘 Postgres<br/>cases · consultations")]:::store
+    Vec[("🧬 pgvector embeddings")]:::vector
+    Blob[["🗂️ Blob storage<br/>local FS · GCS"]]:::store
   end
 
-  subgraph API["FastAPI backend — Cloud Run (apps/api)"]
-    Routes["Route layer<br/>/api/intake · /triage · /council · /research<br/>/consensus · /plan · /message · /cases · /consultations"]
-    Auth["auth.py<br/>Clerk JWT verify"]
-    RL["Rate limit<br/>(sliding window)"]
-    subgraph Pipeline["Council pipeline (openai-agents SDK)"]
-      Intake[Intake agent] --> Triage[Triage agent]
-      Triage --> Council[16 specialist agents<br/>4–6 chosen per case]
-      Council --> Research[PubMed research agent]
-      Research --> Consensus[Consensus agent<br/>ICD · urgency · confidence]
-      Consensus --> Plan[Plan agent]
-      Plan --> Message[Patient-message agent]
-    end
-    Routes --> Auth --> RL --> Pipeline
-  end
+  User --> Web --> API --> Agents
+  Agents --> LLM
+  Agents --> External
+  API <--> Storage
+  Vec -. similarity search .-> Stage2
 
-  subgraph Providers["Model & service providers"]
-    Groq["Groq<br/>GPT-OSS-120B · free tier"]
-    OR["OpenRouter<br/>Claude · Gemini · DeepSeek · Nemotron"]
-    Trace["OpenAI (tracing only)"]
-    PubMed["PubMed E-utilities"]
-    Resend["Resend<br/>(on-call + patient email)"]
-    Speech["Speech provider<br/>OpenRouter · Groq · GCloud · disabled"]
-  end
-
-  subgraph Data["Stateful layer"]
-    PG[("Postgres 15 + pgvector<br/>Cloud SQL in prod")]
-    Blob[["Blob storage<br/>local FS (dev) · GCS (prod)"]]
-    subgraph Schema["Alembic-owned schema"]
-      TFeedback[feedback]
-      TCases[cases]
-      TConsults[consultations]
-      TVec[vector_embeddings<br/>vector col · cosine &lt;=&gt;]
-      TAttach[case_attachments<br/>bytea blobs]
-    end
-    PG --- Schema
-  end
-
-  Client -- HTTPS --> Rewrite
-  Rewrite -- same-origin /api --> Routes
-  Pipeline -- default free --> Groq
-  Pipeline -- paid tiers --> OR
-  Pipeline -- traces --> Trace
-  Research --> PubMed
-  Consensus -- urgency=high --> Resend
-  Message --> Resend
-  Routes <--> PG
-  Routes -- attachments metadata --> PG
-  Routes -- attachment blobs --> Blob
-  Routes <--> Speech
-
-  classDef store fill:#eef,stroke:#447,stroke-width:1px;
-  classDef ext fill:#fef9e7,stroke:#9a7d0a;
-  class PG,Blob,Schema,TFeedback,TCases,TConsults,TVec,TAttach store;
-  class Groq,OR,Trace,PubMed,Resend,Speech ext;
+  classDef user fill:#fde68a,stroke:#b45309,stroke-width:2px,color:#000;
+  classDef frontend fill:#bae6fd,stroke:#0369a1,stroke-width:2px,color:#000;
+  classDef backend fill:#c7d2fe,stroke:#4338ca,stroke-width:2px,color:#000;
+  classDef agent fill:#ddd6fe,stroke:#6d28d9,stroke-width:1.5px,color:#000;
+  classDef judge fill:#fbcfe8,stroke:#be185d,stroke-width:2.5px,color:#000;
+  classDef llm fill:#fed7aa,stroke:#c2410c,stroke-width:2px,color:#000;
+  classDef ext fill:#fef9c3,stroke:#a16207,stroke-width:2px,color:#000;
+  classDef store fill:#bbf7d0,stroke:#15803d,stroke-width:2px,color:#000;
+  classDef vector fill:#a7f3d0,stroke:#047857,stroke-width:2.5px,color:#000;
 ```
 
 **Request path in one line.** Browser → Next.js same-origin `/api/*` rewrite →
