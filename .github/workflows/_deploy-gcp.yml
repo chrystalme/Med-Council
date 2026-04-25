@@ -1,40 +1,35 @@
-name: Deploy (GCP)
+name: _deploy-gcp
 
-# Builds both the api and web images, pushes them to Artifact Registry, then
-# runs `terraform apply` to roll Cloud Run onto the new images together so
-# the two services never drift.
-#
-# Triggers:
-#   - push to main      — automatic on every merge.
-#   - workflow_dispatch — manual button with an optional custom tag override.
-#
-# Secrets / context are routed through `env:` before being referenced in
-# `run:` blocks; secrets that get baked into image build args are passed
-# via the action's `build-args:` block only after being pinned to env.
-#
-# Required repo-level config (one-time setup):
-#   secrets.GCP_WORKLOAD_IDENTITY_PROVIDER      WIF provider resource name
-#   secrets.GCP_DEPLOY_SA                       service account email (deploy perms)
-#   secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY   baked into web client bundle
-#   vars.GCP_PROJECT_ID                         project id
-#   vars.GCP_REGION                             e.g. us-central1
-#   vars.GCP_TF_STATE_BUCKET                    GCS bucket backing terraform state
-#   vars.API_BASE_URL                           deployed api URL (web build arg)
+# Reusable deploy workflow. Builds api + web images, pushes to Artifact
+# Registry, then runs `terraform apply` against the requested workspace and
+# tfvars file so dev and prod roll through the same pipeline. Callers pin the
+# GitHub `environment:` so vars/secrets resolve per env and approval gates
+# (configured on the environment) take effect.
+
 on:
-  push:
-    branches: [main]
-  workflow_dispatch:
+  workflow_call:
     inputs:
-      image_tag:
-        description: 'Image tag to build and deploy. Leave blank to use the commit SHA.'
+      environment:
+        description: GitHub environment name (controls scoped vars/secrets and approval gates).
+        required: true
+        type: string
+      tf_workspace:
+        description: Terraform workspace name. Use 'default' for prod (preserves existing state).
+        required: true
+        type: string
+      tfvars_file:
+        description: Per-env tfvars path, relative to the terraform/ working directory.
+        required: true
+        type: string
+      image_latest_tag:
+        description: '"latest"-style tag pushed alongside :SHA (e.g. "latest", "dev-latest").'
+        required: true
+        type: string
+      image_tag_input:
+        description: Optional image tag override. Blank = commit SHA.
         required: false
+        type: string
         default: ''
-
-concurrency:
-  # One deploy at a time. `cancel-in-progress: false` lets a running apply
-  # finish rather than getting torn down mid-update.
-  group: deploy-gcp
-  cancel-in-progress: false
 
 permissions:
   id-token: write
@@ -42,19 +37,19 @@ permissions:
 
 jobs:
   deploy:
-    name: Build, push, apply (api + web)
+    name: Build, push, apply (${{ inputs.environment }})
     runs-on: ubuntu-latest
-    environment: production
+    environment: ${{ inputs.environment }}
     env:
       PROJECT_ID: ${{ vars.GCP_PROJECT_ID }}
       REGION: ${{ vars.GCP_REGION }}
       TF_STATE_BUCKET: ${{ vars.GCP_TF_STATE_BUCKET }}
-      IMAGE_TAG_INPUT: ${{ github.event.inputs.image_tag }}
+      IMAGE_TAG_INPUT: ${{ inputs.image_tag_input }}
       COMMIT_SHA: ${{ github.sha }}
       API_BASE_URL: ${{ vars.API_BASE_URL }}
-      # Pin Clerk publishable key to an env var at job level so the
-      # build-args block can reference it by name rather than by template
-      # expansion inline.
+      LATEST_TAG: ${{ inputs.image_latest_tag }}
+      TFVARS_FILE: ${{ inputs.tfvars_file }}
+      TF_WORKSPACE_NAME: ${{ inputs.tf_workspace }}
       NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
     steps:
       - uses: actions/checkout@v4
@@ -96,15 +91,13 @@ jobs:
           platforms: linux/amd64
           tags: |
             ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/medai/api:${{ env.RESOLVED_TAG }}
-            ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/medai/api:latest
-          cache-from: type=gha,scope=api
-          cache-to: type=gha,scope=api,mode=max
+            ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/medai/api:${{ env.LATEST_TAG }}
+          cache-from: type=gha,scope=api-${{ inputs.environment }}
+          cache-to: type=gha,scope=api-${{ inputs.environment }},mode=max
 
       - name: Build and push web image
         uses: docker/build-push-action@v6
         with:
-          # Web Dockerfile needs the repo root as context (copies pnpm
-          # workspace manifests + apps/web), so the context here is ".".
           context: .
           file: apps/web/Dockerfile
           push: true
@@ -115,9 +108,9 @@ jobs:
             NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ env.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
           tags: |
             ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/medai/web:${{ env.RESOLVED_TAG }}
-            ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/medai/web:latest
-          cache-from: type=gha,scope=web
-          cache-to: type=gha,scope=web,mode=max
+            ${{ env.REGION }}-docker.pkg.dev/${{ env.PROJECT_ID }}/medai/web:${{ env.LATEST_TAG }}
+          cache-from: type=gha,scope=web-${{ inputs.environment }}
+          cache-to: type=gha,scope=web-${{ inputs.environment }},mode=max
 
       - name: Set up Terraform
         uses: hashicorp/setup-terraform@v3
@@ -128,10 +121,20 @@ jobs:
         working-directory: terraform
         run: terraform init -backend-config="bucket=${TF_STATE_BUCKET}" -input=false
 
+      - name: Select Terraform workspace
+        working-directory: terraform
+        run: |
+          if [ "$TF_WORKSPACE_NAME" = "default" ]; then
+            terraform workspace select default
+          else
+            terraform workspace select -or-create "$TF_WORKSPACE_NAME"
+          fi
+
       - name: Terraform apply (rolls api + web onto the new tag)
         working-directory: terraform
         run: |
           terraform apply -input=false -auto-approve \
+            -var-file="$TFVARS_FILE" \
             -var="project_id=${PROJECT_ID}" \
             -var="region=${REGION}" \
             -var="image_tag=${RESOLVED_TAG}" \
@@ -143,7 +146,8 @@ jobs:
           API_URL="$(terraform output -raw service_url 2>/dev/null || echo 'n/a')"
           WEB_URL="$(terraform output -raw web_service_url 2>/dev/null || echo 'n/a')"
           {
-            echo "### Deployment"
+            echo "### Deployment (${{ inputs.environment }})"
+            echo "- workspace: \`${TF_WORKSPACE_NAME}\`"
             echo "- tag: \`${RESOLVED_TAG}\`"
             echo "- api image: \`${REGION}-docker.pkg.dev/${PROJECT_ID}/medai/api:${RESOLVED_TAG}\`"
             echo "- web image: \`${REGION}-docker.pkg.dev/${PROJECT_ID}/medai/web:${RESOLVED_TAG}\`"
