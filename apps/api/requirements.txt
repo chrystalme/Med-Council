@@ -182,7 +182,7 @@ proto-plus==1.27.2
     #   google-api-core
     #   google-cloud-speech
     #   google-cloud-texttospeech
-protobuf==6.33.6
+protobuf==7.34.1
     # via
     #   google-api-core
     #   google-cloud-speech
