@@ -84,6 +84,7 @@ type CaseState = {
 
 const LS_CASE = 'medai_case_id';
 const LS_SAVED_CONSULTATION_FOR_CASE = 'medai_consultation_saved_for';
+const LS_DOCTOR_EMAIL = 'medai_doctor_email';
 
 function parseNumberedQuestions(text: string): string[] {
   return text
@@ -135,6 +136,31 @@ export function CaseWorkspace() {
   const [followupQ, setFollowupQ] = useState('');
   const [followupPrior, setFollowupPrior] = useState('');
   const [followupReply, setFollowupReply] = useState('');
+  // Lazy initializer runs once per mount (not on every render). The
+  // `typeof window` guard handles the SSR pre-render where `localStorage`
+  // does not exist; the try/catch covers Safari private-mode where
+  // `localStorage` access throws.
+  const [doctorEmail, setDoctorEmail] = useState<string>(() => {
+    try {
+      return typeof window !== 'undefined'
+        ? localStorage.getItem(LS_DOCTOR_EMAIL) ?? ''
+        : '';
+    } catch {
+      return '';
+    }
+  });
+  const [doctorNotifyStatus, setDoctorNotifyStatus] = useState<
+    'idle' | 'sent' | 'failed' | 'skipped'
+  >('idle');
+
+  useEffect(() => {
+    try {
+      if (doctorEmail.trim()) localStorage.setItem(LS_DOCTOR_EMAIL, doctorEmail.trim());
+      else localStorage.removeItem(LS_DOCTOR_EMAIL);
+    } catch {
+      /* ignore */
+    }
+  }, [doctorEmail]);
 
   const [step, setStep] = useState(0);
   const [maxStep, setMaxStep] = useState(0);
@@ -570,12 +596,24 @@ export function CaseWorkspace() {
     setBusy('Writing patient-facing summary…');
     const tok = await tokenFn();
     try {
-      const data = await councilJson<{ message: string }>(`/api/message`, {
+      const data = await councilJson<{
+        message: string;
+        doctor_notified?: boolean;
+        doctor_notify_status?: 'sent' | 'failed' | 'skipped';
+      }>(`/api/message`, {
         method: 'POST',
         token: tok,
-        body: JSON.stringify({ symptoms, consensus, plan, model: modelKey, case_id: caseId }),
+        body: JSON.stringify({
+          symptoms,
+          consensus,
+          plan,
+          model: modelKey,
+          case_id: caseId,
+          doctor_email: doctorEmail.trim() || null,
+        }),
       });
       setMessage(data.message ?? '');
+      setDoctorNotifyStatus(data.doctor_notify_status ?? (data.doctor_notified ? 'sent' : 'skipped'));
       advanceTo(7);
     } catch (e) {
       setErr(formatCouncilError(e, 'Message'));
@@ -781,6 +819,7 @@ export function CaseWorkspace() {
     setConsensus(null);
     setPlan('');
     setMessage('');
+    setDoctorNotifyStatus('idle');
     setErr(null);
     autoRunRef.current = { 2: false, 3: false, 4: false, 5: false, 6: false };
     setFollowupQ('');
@@ -822,15 +861,31 @@ export function CaseWorkspace() {
               </span>
             )}
           </div>
-          <button
-            type='button'
-            className='mono-label text-ink-muted hover:text-indigo transition-colors inline-flex items-center gap-2'
-            onClick={resetWithConfirm}
-            disabled={!!busy}
-          >
-            <span aria-hidden>⟲</span> reset <span className='diamond' /> start
-            over
-          </button>
+          <div className='flex items-center gap-3'>
+            <label className='mono-label text-ink-muted inline-flex items-center gap-2'>
+              <span>doctor email</span>
+              <input
+                type='email'
+                inputMode='email'
+                autoComplete='email'
+                placeholder='oncall@clinic.example'
+                value={doctorEmail}
+                onChange={e => setDoctorEmail(e.target.value)}
+                disabled={!!busy || pipelineLocked}
+                className='field h-9 px-2 text-[13px] min-w-[220px]'
+                aria-label='On-call doctor email for urgent referrals'
+              />
+            </label>
+            <button
+              type='button'
+              className='mono-label text-ink-muted hover:text-indigo transition-colors inline-flex items-center gap-2'
+              onClick={resetWithConfirm}
+              disabled={!!busy}
+            >
+              <span aria-hidden>⟲</span> reset <span className='diamond' /> start
+              over
+            </button>
+          </div>
         </div>
 
         <ol className='grid grid-cols-4 sm:grid-cols-8 gap-1.5'>
@@ -1269,6 +1324,41 @@ export function CaseWorkspace() {
                 <VoiceOutput text={message} label='Read patient message aloud' onPaywallError={upgrade.show} />
               </div>
             </div>
+
+            {doctorNotifyStatus === 'sent' && (
+              <div
+                role='status'
+                aria-live='polite'
+                className='rounded-xl border border-cornflower bg-periwinkle-soft/60 p-4 text-[14px] text-ink flex items-start gap-3'
+              >
+                <span aria-hidden className='mt-[2px]'>✓</span>
+                <div>
+                  <p className='font-medium'>Sent to {doctorEmail.trim()} for immediate follow-up.</p>
+                  <p className='text-ink-slate text-[13px] mt-1'>
+                    Urgency triggered an automated referral with the patient
+                    summary, plan, and consensus.
+                  </p>
+                </div>
+              </div>
+            )}
+            {doctorNotifyStatus === 'failed' && (
+              <div
+                role='alert'
+                aria-live='assertive'
+                className='rounded-xl border border-red-400 bg-red-50 p-4 text-[14px] text-red-900 flex items-start gap-3'
+              >
+                <span aria-hidden className='mt-[2px]'>!</span>
+                <div>
+                  <p className='font-medium'>
+                    Could not reach {doctorEmail.trim() || 'the on-call doctor'}.
+                  </p>
+                  <p className='text-[13px] mt-1'>
+                    Urgency was high but the referral email did not send. Please
+                    contact the doctor directly.
+                  </p>
+                </div>
+              </div>
+            )}
 
             <EmailToPatient
               consensus={consensus}

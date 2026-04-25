@@ -9,6 +9,7 @@ from __future__ import annotations
 import html as _html
 import json
 import logging
+import math
 import os
 import urllib.error
 import urllib.request
@@ -35,6 +36,25 @@ URGENT_VALUES = frozenset(
 def _urgency_from_consensus(consensus: dict) -> str:
     u = consensus.get("urgency") or consensus.get("urgencyLevel") or ""
     return str(u).strip().lower()
+
+
+def is_urgent(consensus: dict) -> bool:
+    """True when consensus urgency warrants an on-call page."""
+    return _urgency_from_consensus(consensus) in URGENT_VALUES
+
+
+def _safe_subject_part(value: object, max_len: int = 120) -> str:
+    """Strip control chars/CRLF and cap length for safe inclusion in email subjects."""
+    return "".join(c for c in str(value) if c.isprintable())[:max_len].strip()
+
+
+def _mask_email(addr: str) -> str:
+    """Best-effort masking of an email for INFO logs (e.g. ``ali***@clinic.com``)."""
+    addr = (addr or "").strip()
+    if "@" not in addr:
+        return "***"
+    local, _, domain = addr.partition("@")
+    return (local[:3] + "***@" + domain) if local else "***@" + domain
 
 
 def maybe_escalate_oncall(*, consensus: dict, symptoms: str) -> None:
@@ -271,6 +291,109 @@ def _render_patient_html(
   </table>
 </body>
 </html>"""
+
+
+def notify_doctor_with_message(
+    *,
+    doctor_email: str,
+    consensus: dict,
+    plan_md: str,
+    patient_message: str,
+    symptoms: str,
+) -> str:
+    """Email the patient-facing message + plan to a clinician for immediate follow-up.
+
+    Returns one of: ``"sent"`` (dispatched), ``"skipped"`` (preconditions not
+    met — Resend not configured, recipient missing, or urgency routine) or
+    ``"failed"`` (Resend rejected or transport error). Callers can use this
+    to drive distinct UI states — a clinician needs to know when an *attempted*
+    page failed vs. when none was warranted.
+    """
+    key = os.environ.get("RESEND_API_KEY", "").strip()
+    from_addr = os.environ.get("RESEND_FROM_EMAIL", "").strip()
+    to = (doctor_email or "").strip()
+    if not key or not from_addr or not to:
+        log.info(
+            "doctor notify skipped — Resend or address missing (key=%s from=%s to=%s)",
+            "set" if key else "missing",
+            "set" if from_addr else "missing",
+            "set" if to else "missing",
+        )
+        return "skipped"
+
+    if not is_urgent(consensus):
+        log.info("doctor notify skipped — urgency not in URGENT_VALUES")
+        return "skipped"
+
+    urg = _urgency_from_consensus(consensus)
+    dx = consensus.get("primaryDiagnosis") or consensus.get("primary_diagnosis") or "—"
+    icd = consensus.get("icdCode") or consensus.get("icd_code") or ""
+    confidence_raw = consensus.get("confidence")
+    confidence: int | None = None
+    if isinstance(confidence_raw, (int, float)):
+        try:
+            if math.isfinite(float(confidence_raw)):
+                confidence = int(confidence_raw)
+        except (TypeError, ValueError):
+            confidence = None
+
+    safe_urg = _safe_subject_part(urg, max_len=24)
+    safe_dx = _safe_subject_part(dx, max_len=120)
+    subject = f"[MedAI Council] {safe_urg.upper()} — {safe_dx} — patient follow-up needed"
+    header_meta = (
+        f"<p style=\"margin:0 0 6px 0;font-size:13px;color:#5a6690\">"
+        f"<strong>Urgency:</strong> {_html.escape(urg)}"
+        + (f" &middot; ICD {_html.escape(str(icd))}" if icd else "")
+        + (f" &middot; confidence {confidence}%" if confidence is not None else "")
+        + "</p>"
+    )
+
+    html = f"""<!doctype html>
+<html><body style="font-family:-apple-system,'Segoe UI',sans-serif;color:#1a2348;background:#ede8f5;padding:24px">
+  <div style="max-width:640px;margin:0 auto;background:#fff;border:1px solid #cfd3e4;border-radius:14px;overflow:hidden">
+    <div style="padding:20px 24px;border-bottom:1px solid #e1dcef;background:#f6f3fa">
+      <p style="margin:0;font-size:11px;letter-spacing:0.18em;text-transform:uppercase;color:#3d52a0">MedAI Council &middot; Doctor referral</p>
+      <h1 style="margin:6px 0 0 0;font-family:Georgia,serif;font-size:20px;color:#1a2348">{_html.escape(str(dx))}</h1>
+      {header_meta}
+    </div>
+    <div style="padding:20px 24px">
+      <h2 style="margin:0 0 8px 0;font-size:15px;color:#3d52a0">Patient symptoms</h2>
+      <pre style="white-space:pre-wrap;font-size:13px;background:#f6f3fa;padding:10px;border-radius:8px">{_html.escape(symptoms[:4000])}</pre>
+      <h2 style="margin:18px 0 8px 0;font-size:15px;color:#3d52a0">Patient-facing message</h2>
+      {_md_to_html(patient_message)}
+      <h2 style="margin:18px 0 8px 0;font-size:15px;color:#3d52a0">Coordinated plan</h2>
+      {_md_to_html(plan_md)}
+      <h2 style="margin:18px 0 8px 0;font-size:15px;color:#3d52a0">Consensus JSON</h2>
+      <pre style="white-space:pre-wrap;font-size:12px;background:#f6f3fa;padding:10px;border-radius:8px">{_html.escape(json.dumps(consensus, indent=2)[:12000])}</pre>
+    </div>
+  </div>
+</body></html>"""
+
+    payload = json.dumps(
+        {"from": from_addr, "to": [to], "subject": subject, "html": html}
+    ).encode("utf-8")
+
+    req = urllib.request.Request(
+        "https://api.resend.com/emails",
+        data=payload,
+        method="POST",
+        headers={
+            "Authorization": f"Bearer {key}",
+            "Content-Type": "application/json",
+        },
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            resp.read()
+        log.info("doctor referral email sent to %s (urgency=%s)", _mask_email(to), urg)
+        return "sent"
+    except urllib.error.HTTPError as exc:
+        body = exc.read().decode("utf-8", errors="replace")[:500]
+        log.warning("Resend HTTP error %s for %s: %s", exc.code, _mask_email(to), body)
+        return "failed"
+    except Exception as exc:
+        log.warning("Doctor referral send failed for %s: %s", _mask_email(to), exc)
+        return "failed"
 
 
 def send_patient_email(

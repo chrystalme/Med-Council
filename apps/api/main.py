@@ -47,7 +47,9 @@ from pydantic import BaseModel, Field, field_validator
 from auth import AuthUser, auth_configured, current_user_maybe_required, require_pro
 from escalation import (
     ResendNotConfiguredError,
+    is_urgent,
     maybe_escalate_oncall,
+    notify_doctor_with_message,
     send_patient_email,
 )
 from rate_limit import enforce_rate_limit, rate_limit_enabled
@@ -800,6 +802,7 @@ class MessageIn(_ModeledRequest):
     symptoms: str
     consensus: dict
     plan: str
+    doctor_email: str | None = None
 
 
 class PatientFollowUpIn(_ModeledRequest):
@@ -1627,7 +1630,23 @@ async def patient_message(
         },
     ):
         message = await run_agent(message_agent, prompt, model=model_slug)
-    return {"message": message}
+
+    doctor_notify_status = "skipped"
+    if (req.doctor_email or "").strip() and is_urgent(req.consensus):
+        doctor_notify_status = await asyncio.to_thread(
+            notify_doctor_with_message,
+            doctor_email=req.doctor_email or "",
+            consensus=req.consensus,
+            plan_md=req.plan,
+            patient_message=message,
+            symptoms=req.symptoms,
+        )
+
+    return {
+        "message": message,
+        "doctor_notified": doctor_notify_status == "sent",
+        "doctor_notify_status": doctor_notify_status,
+    }
 
 
 @app.post("/api/message/followup")
