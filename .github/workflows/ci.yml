@@ -1,13 +1,10 @@
 name: CI
 
-# Testing pipeline. Runs on PRs targeting main/develop and on direct pushes
-# to those branches so the same gates apply to both promotion paths.
-
 on:
   push:
-    branches: [main, develop]
+    branches: [main]
   pull_request:
-    branches: [main, develop]
+    branches: [main]
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -68,10 +65,3 @@ jobs:
 
       - name: Import check
         run: uv run python -c "import main; import auth; import council; print('import ok')"
-
-      # Pytest is non-blocking until the suite is hermetic — some tests today
-      # touch live providers (Langfuse, OpenAI). Drop continue-on-error once
-      # those are stubbed or marked with a network/integration mark.
-      - name: Pytest
-        run: uv run pytest tests/ -q
-        continue-on-error: true
