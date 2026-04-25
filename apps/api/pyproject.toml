@@ -25,4 +25,6 @@ dependencies = [
     # Speech provider for GCP deploy (SPEECH_PROVIDER=gcloud). Swap out when cost matters.
     "google-cloud-speech>=2.27.0",
     "google-cloud-texttospeech>=2.21.0",
+    "langfuse>=4.5.1",
+    "openinference-instrumentation-openai-agents>=1.4.1",
 ]
