@@ -190,6 +190,7 @@ Minimum required to run the API:
 
 - `OPENROUTER_API_KEY` · [openrouter.ai/keys](https://openrouter.ai/keys)
 - `OPENAI_API_KEY` · [platform.openai.com/api-keys](https://platform.openai.com/api-keys) (tracing only)
+- Optional Langfuse tracing: `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, `LANGFUSE_BASE_URL`
 - `DATABASE_URL` · e.g. `postgresql://$USER@localhost:5432/medai_council` (local Postgres). When deployed, set this to the Cloud SQL connection string.
 - `STORAGE_BACKEND` · `local` (default; writes under `apps/api/storage_data/`) or `gcs` — with `GCS_BUCKET=<your-bucket>` when set to `gcs`.
 
@@ -318,8 +319,10 @@ Two providers are wired side-by-side and routed via slug prefix in
   120B served on Groq. Fast, reliable, and generous on the free plan.
 - **Pro tier:** anything else in the registry (Claude Opus 4.7, Gemini 2.5
   Pro, DeepSeek R1, Nemotron 120B) routed through **OpenRouter**.
-- **Tracing** goes to OpenAI via `OPENAI_API_KEY` — that key is deliberately
-  not reused for inference or speech (see `DECISIONS.md`).
+- **Tracing** goes to OpenAI via `OPENAI_API_KEY`; when Langfuse env vars are
+  set, OpenAI Agents SDK spans are also exported to Langfuse with full
+  prompts/outputs. The OpenAI key is deliberately not reused for inference or
+  speech (see `DECISIONS.md`).
 
 Users can select a model per case via the `ModelSelector` component; locked
 (pro-only) models return a structured 402 if called without the entitlement.
@@ -331,6 +334,11 @@ Users can select a model per case via the `ModelSelector` component; locked
 All agent runs export to [platform.openai.com/traces](https://platform.openai.com/traces)
 via the Agents SDK's built-in tracer. Uses `OPENAI_API_KEY` — separate from
 the inference key.
+
+Set `LANGFUSE_PUBLIC_KEY`, `LANGFUSE_SECRET_KEY`, and `LANGFUSE_BASE_URL`
+to also export OpenAI Agents SDK spans to Langfuse. This integration captures
+full prompts and outputs for debugging; set `LANGFUSE_ENABLED=0` to disable it
+without removing the credentials.
 
 ---
 

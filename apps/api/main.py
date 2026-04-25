@@ -1,7 +1,7 @@
 """
 MedAI Council — FastAPI Backend
 Inference : OpenRouter  →  nvidia/nemotron-3-super-120b-a12b
-Tracing   : OpenAI Agents SDK  →  platform.openai.com/traces (export key separate from OpenRouter)
+Tracing   : OpenAI Agents SDK  →  platform.openai.com/traces + optional Langfuse
 
 Environment variables required:
     OPENROUTER_API_KEY   — for model inference (https://openrouter.ai/keys)
@@ -72,6 +72,7 @@ from council_schemas import (
     parse_research_papers,
 )
 from consultation_memory import build_consultation_memory_text
+from langfuse_tracing import configure_langfuse, flush_langfuse, langfuse_attributes
 
 from council import (
     ALL_SPECIALIST_IDS,
@@ -181,6 +182,7 @@ def _flush_sdk_traces() -> None:
         get_trace_provider().force_flush()
     except Exception:
         pass
+    flush_langfuse()
 
 
 def _coerce_trace_metadata(metadata: dict | None) -> dict[str, str]:
@@ -218,8 +220,14 @@ def traced_workflow(name: str, *, group_id: str | None = None, metadata: dict | 
         metadata: Arbitrary key-value pairs attached to the trace for filtering/search.
             All values are coerced to strings (tracing ingestion requires string values).
     """
-    with workflow_trace(name, group_id=group_id, metadata=_coerce_trace_metadata(metadata)):
-        yield
+    trace_metadata = _coerce_trace_metadata(metadata)
+    with langfuse_attributes(
+        session_id=group_id,
+        metadata=trace_metadata,
+        tags=[trace_metadata["stage"]] if "stage" in trace_metadata else None,
+    ):
+        with workflow_trace(name, group_id=group_id, metadata=trace_metadata):
+            yield
     _flush_sdk_traces()
 
 
@@ -252,6 +260,7 @@ async def lifespan(app: FastAPI):
     set_default_openai_client(openrouter_client, use_for_tracing=False)
     set_default_openai_api("chat_completions")
     set_tracing_export_api_key(openai_key)
+    langfuse_enabled = configure_langfuse()
 
     _council_model_provider = MultiProvider(
         openai_client=openrouter_client,
@@ -319,7 +328,8 @@ async def lifespan(app: FastAPI):
 
     default_label = f"vertex:{_vertex_model_provider._default_model}" if _vertex_model_provider else "none"
     print(f"✓ Inference  → Vertex AI  ({default_label}) + OpenRouter (gpt-5 only)")
-    print("✓ Tracing    → platform.openai.com/traces  (OpenAI Agents SDK exporter)")
+    tracing_targets = "platform.openai.com/traces + Langfuse" if langfuse_enabled else "platform.openai.com/traces"
+    print(f"✓ Tracing    → {tracing_targets}")
     print(f"✓ Database   → {_db.get_driver()}  (view feedback: /feedback/{FEEDBACK_SECRET})")
     if auth_configured():
         print("✓ Auth       → Clerk JWT verification enabled (CLERK_ISSUER set)")
