@@ -4,10 +4,25 @@ provider "google" {
 }
 
 locals {
-  bucket_name     = var.gcs_bucket_name != "" ? var.gcs_bucket_name : "${var.project_id}-medai-attachments"
-  image_uri       = "${var.region}-docker.pkg.dev/${var.project_id}/${var.ar_repo}/api:${var.image_tag}"
-  web_image_tag   = var.web_image_tag != "" ? var.web_image_tag : var.image_tag
-  web_image_uri   = "${var.region}-docker.pkg.dev/${var.project_id}/${var.ar_repo}/web:${local.web_image_tag}"
+  bucket_name = var.gcs_bucket_name != "" ? var.gcs_bucket_name : "${var.project_id}-medai-attachments${var.env_suffix}"
+
+  # Cloud Run pins by digest at revision creation, so binding Terraform to
+  # the build's immutable digest is the only way to guarantee that a rerun
+  # which produces *different bytes under the same SHA tag* actually rolls
+  # a new revision. When the deploy workflow doesn't supply a digest (e.g.
+  # someone running terraform apply locally with just an image_tag), fall
+  # back to tag-based reference.
+  ar_base_uri   = "${var.region}-docker.pkg.dev/${var.project_id}/${var.ar_repo}"
+  image_uri     = var.api_image_digest != "" ? "${local.ar_base_uri}/api@${var.api_image_digest}" : "${local.ar_base_uri}/api:${var.image_tag}"
+  web_image_tag = var.web_image_tag != "" ? var.web_image_tag : var.image_tag
+  web_image_uri = var.web_image_digest != "" ? "${local.ar_base_uri}/web@${var.web_image_digest}" : "${local.ar_base_uri}/web:${local.web_image_tag}"
+
+  # DATABASE_URL must differ per workspace (each has its own Cloud SQL
+  # instance + random_password). Build it inline rather than binding from the
+  # shared Secret Manager entry, which only carries the prod DSN. The legacy
+  # DATABASE_URL secret container stays managed for now but is unused.
+  database_url     = "postgresql://${var.db_user}:${urlencode(random_password.db.result)}@/${var.db_name}?host=/cloudsql/${google_sql_database_instance.main.connection_name}"
+  api_secret_names = [for s in var.secret_names : s if s != "DATABASE_URL"]
 }
 
 # ── APIs ─────────────────────────────────────────────────────────────────────
@@ -250,9 +265,29 @@ resource "google_cloud_run_v2_service" "api" {
         value = google_cloud_run_v2_service.web.uri
       }
 
-      # Secrets → env vars.
+      # DATABASE_URL is workspace-specific (different Cloud SQL instance and
+      # random_password per env), so it's set inline instead of bound from
+      # the shared Secret Manager entry below.
+      env {
+        name  = "DATABASE_URL"
+        value = local.database_url
+      }
+
+      # Sandbox-friendly redirect: when set, escalation.py rewrites every
+      # outgoing Resend recipient to this address. Lets dev keep using
+      # onboarding@resend.dev (the sandbox sender) without verifying a
+      # domain, since sandbox only delivers to the account-owner email.
       dynamic "env" {
-        for_each = toset(var.secret_names)
+        for_each = var.email_override_to != "" ? toset([var.email_override_to]) : toset([])
+        content {
+          name  = "EMAIL_OVERRIDE_TO"
+          value = env.value
+        }
+      }
+
+      # Secrets → env vars. DATABASE_URL is excluded — see local.api_secret_names.
+      dynamic "env" {
+        for_each = toset(local.api_secret_names)
         content {
           name = env.value
           value_source {

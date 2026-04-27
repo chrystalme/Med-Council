@@ -15,6 +15,12 @@ variable "service_name" {
   default     = "medai-api"
 }
 
+variable "env_suffix" {
+  description = "Suffix appended to default resource names so envs can share a project (e.g. '-dev'). Empty for prod."
+  type        = string
+  default     = ""
+}
+
 variable "ar_repo" {
   description = "Artifact Registry repo name (Docker format)."
   type        = string
@@ -22,8 +28,20 @@ variable "ar_repo" {
 }
 
 variable "image_tag" {
-  description = "Image tag to deploy (e.g. a git SHA). Required."
+  description = "Image tag to deploy (e.g. a git SHA). Used for human-readable lineage and as a fallback when image digests are not provided."
   type        = string
+}
+
+variable "api_image_digest" {
+  description = "Immutable image digest for the api image (e.g. 'sha256:...'). When set, Cloud Run pins the api revision by digest, which guarantees that any rerun-rebuild with new content rolls a new revision (and a no-op rebuild correctly stays a no-op). Empty falls back to image_tag."
+  type        = string
+  default     = ""
+}
+
+variable "web_image_digest" {
+  description = "Immutable image digest for the web image. Same semantics as api_image_digest."
+  type        = string
+  default     = ""
 }
 
 variable "db_instance_name" {
@@ -136,4 +154,10 @@ variable "web_max_instances" {
   description = "Cloud Run max instances for the web service."
   type        = number
   default     = 10
+}
+
+variable "email_override_to" {
+  description = "If non-empty, every outgoing Resend email is rewritten to this recipient. Used in dev so we can stay on Resend's sandbox sender (onboarding@resend.dev) without verifying a domain — sandbox only delivers to the account-owner address. Leave empty in prod."
+  type        = string
+  default     = ""
 }

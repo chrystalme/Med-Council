@@ -1,0 +1,49 @@
+name: Deploy (prod)
+
+# Deploys the api + web Cloud Run services on every push to `main`.
+# Uses the `production` GitHub environment so an approval gate (configured
+# on that environment in repo settings) can hold the run before any cloud
+# changes happen. The build/push/apply logic lives in
+# .github/actions/deploy-gcp (composite action) so it doesn't appear as a
+# separate workflow in the Actions tab.
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+    inputs:
+      image_tag:
+        description: 'Image tag to build and deploy. Leave blank to use the commit SHA.'
+        required: false
+        default: ''
+
+concurrency:
+  group: deploy-prod
+  cancel-in-progress: false
+
+permissions:
+  id-token: write
+  contents: read
+
+jobs:
+  prod:
+    name: Build, push, apply (production)
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy to GCP
+        uses: ./.github/actions/deploy-gcp
+        with:
+          environment: production
+          tf_workspace: default
+          tfvars_file: env/prod.tfvars
+          image_latest_tag: latest
+          image_tag_input: ${{ github.event.inputs.image_tag }}
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          region: ${{ vars.GCP_REGION }}
+          tf_state_bucket: ${{ vars.GCP_TF_STATE_BUCKET }}
+          api_base_url: ${{ vars.API_BASE_URL }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          deploy_sa: ${{ secrets.GCP_DEPLOY_SA }}
+          next_public_clerk_publishable_key: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
