@@ -29,9 +29,11 @@ export function PaywallBanner() {
             <p className="mono-label text-ink-muted">Free tier <span className="diamond" /> limits apply</p>
           </div>
           <p className="text-ink-slate text-[14.5px]">
-            Free tier: Nemotron model, browser voice, 4 saved consultations,
-            5 test attachments per case (1 MB each). Upgrade for premium models,
-            Whisper voice, unlimited memory, and 10 MB × 20 attachments.
+            Free tier: Gemini 2.5 Flash Lite, browser voice, 4 saved
+            consultations, 5 test attachments per case (1 MB each). Upgrade
+            for premium models (Claude Opus 4.7, GPT-5, Gemini 2.5 Pro,
+            Llama 3.3 70B), Whisper voice, unlimited memory, and 10 MB × 20
+            attachments.
           </p>
           <button
             type="button"

@@ -188,10 +188,10 @@ export default function LandingPage() {
                 seat minimums.
               </h2>
               <p className="text-[1.0625rem] text-ink-slate max-w-[48ch] leading-relaxed text-pretty">
-                Free gives you the full 7-stage pipeline on Nemotron, browser
-                voice, and memory for up to four consultations. Pro unlocks
-                premium models, Whisper transcription, unlimited saved
-                consultations, 10 MB × 20 test attachments, and email
+                Free gives you the full 7-stage pipeline on Gemini 2.5 Flash
+                Lite, browser voice, and memory for up to four consultations.
+                Pro unlocks premium models, Whisper transcription, unlimited
+                saved consultations, 10 MB × 20 test attachments, and email
                 delivery.
               </p>
             </div>
@@ -200,7 +200,7 @@ export default function LandingPage() {
               <ul className="space-y-2 text-[14.5px] text-ink-slate">
                 <li className="flex items-baseline gap-3">
                   <span className="plate-counter text-ink-faint w-7 tabular-nums">I</span>
-                  Claude Opus 4.7, GPT-5, Gemini 2.5 Pro, DeepSeek R1
+                  Claude Opus 4.7, GPT-5, Gemini 2.5 Pro, Llama 3.3 70B
                 </li>
                 <li className="flex items-baseline gap-3">
                   <span className="plate-counter text-ink-faint w-7 tabular-nums">II</span>
@@ -234,8 +234,8 @@ export default function LandingPage() {
           MedAI Council <span className="diamond" /> a research artefact
         </span>
         <span>
-          Inference <span className="diamond" /> OpenRouter{" "}
-          <span className="diamond" /> nvidia/nemotron-3-super-120b-a12b
+          Inference <span className="diamond" /> Vertex AI{" "}
+          <span className="diamond" /> Gemini · Claude · Llama · GPT-5
         </span>
       </footer>
     </div>
