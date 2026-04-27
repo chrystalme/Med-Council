@@ -265,6 +265,18 @@ resource "google_cloud_run_v2_service" "api" {
         value = local.database_url
       }
 
+      # Sandbox-friendly redirect: when set, escalation.py rewrites every
+      # outgoing Resend recipient to this address. Lets dev keep using
+      # onboarding@resend.dev (the sandbox sender) without verifying a
+      # domain, since sandbox only delivers to the account-owner email.
+      dynamic "env" {
+        for_each = var.email_override_to != "" ? toset([var.email_override_to]) : toset([])
+        content {
+          name  = "EMAIL_OVERRIDE_TO"
+          value = env.value
+        }
+      }
+
       # Secrets → env vars. DATABASE_URL is excluded — see local.api_secret_names.
       dynamic "env" {
         for_each = toset(local.api_secret_names)
