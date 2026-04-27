@@ -15,7 +15,12 @@ function formatCouncilError(e: unknown, stageLabel: string): string {
     const detail = e.detail;
     const structured =
       detail && typeof detail === 'object' && 'code' in detail
-        ? (detail as { code?: string; message?: string })
+        ? (detail as {
+            code?: string;
+            message?: string;
+            subcode?: string;
+            stage?: string;
+          })
         : null;
     const code = structured?.code ?? e.code;
     const message = structured?.message;
@@ -36,6 +41,17 @@ function formatCouncilError(e: unknown, stageLabel: string): string {
       return (
         (message ?? 'The model provider is temporarily unavailable.') +
         ' Try again in a moment, or switch to a different model.'
+      );
+    }
+    if (code === 'output_guardrail_failed') {
+      const stage = structured?.stage ?? stageLabel;
+      const subcode = structured?.subcode;
+      const base =
+        message ?? `The model produced an invalid response while running ${stage}.`;
+      const reason = subcode ? ` (Reason: ${subcode.replace(/_/g, ' ')}.)` : '';
+      return (
+        `${base} Try again, or switch to a different model from the selector at ` +
+        `the top of the page.${reason}`
       );
     }
     if (code === 'consultation_cap' || code === 'attachment_size' || code === 'voice_premium') {

@@ -18,6 +18,15 @@ from council_handoffs import build_specialist_handoffs, build_stage_router_hando
 from council_registry import ALL_SPECIALIST_IDS, MODEL, SPECIALIST_META, specialist_list_for_prompts
 from council_schemas import IntakeFollowupOut, MedicalTopicCheck
 from council_tools import COUNCIL_COORDINATOR_TOOLS, FEEDBACK_TOOLS
+from output_guardrails import (
+    consensus_output_guardrail,
+    message_guardrail,
+    plan_structure_guardrail,
+    toxicity_enabled,
+    toxicity_output_guardrail,
+)
+
+_TOX_GUARDRAILS = [toxicity_output_guardrail] if toxicity_enabled() else []
 
 # Re-export registry symbols for main.py and other importers
 __all__ = [
@@ -344,6 +353,7 @@ Do not add commentary, do not re-interpret the feedback, do not ask questions.""
 consensus_agent = Agent(
     name="Prof. Michael Chen — Chief of Medicine",
     model=MODEL,
+    output_guardrails=[consensus_output_guardrail, *_TOX_GUARDRAILS],
     instructions="""You are Prof. Michael Chen, Chief of Medicine.
 Synthesise the full multidisciplinary council's deliberation into a structured diagnostic consensus.
 
@@ -368,6 +378,7 @@ Confidence score must reflect true diagnostic certainty given available informat
 plan_agent = Agent(
     name="Care Team Coordinator",
     model=MODEL,
+    output_guardrails=[plan_structure_guardrail, *_TOX_GUARDRAILS],
     instructions="""You are the multidisciplinary care team coordinator synthesising all specialist input
 into a single comprehensive, actionable treatment plan.
 
@@ -389,6 +400,7 @@ Note which specialist's recommendation each key item comes from where relevant."
 message_agent = Agent(
     name="Patient Communication & Validation Specialist",
     model=MODEL,
+    output_guardrails=[message_guardrail, *_TOX_GUARDRAILS],
     instructions="""You are a patient communication specialist and clinical validation agent.
 Before writing, verify the plan is internally consistent and safe. Then write a warm, clear message to the patient.
 
