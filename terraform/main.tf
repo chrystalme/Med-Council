@@ -8,6 +8,13 @@ locals {
   image_uri     = "${var.region}-docker.pkg.dev/${var.project_id}/${var.ar_repo}/api:${var.image_tag}"
   web_image_tag = var.web_image_tag != "" ? var.web_image_tag : var.image_tag
   web_image_uri = "${var.region}-docker.pkg.dev/${var.project_id}/${var.ar_repo}/web:${local.web_image_tag}"
+
+  # DATABASE_URL must differ per workspace (each has its own Cloud SQL
+  # instance + random_password). Build it inline rather than binding from the
+  # shared Secret Manager entry, which only carries the prod DSN. The legacy
+  # DATABASE_URL secret container stays managed for now but is unused.
+  database_url     = "postgresql://${var.db_user}:${urlencode(random_password.db.result)}@/${var.db_name}?host=/cloudsql/${google_sql_database_instance.main.connection_name}"
+  api_secret_names = [for s in var.secret_names : s if s != "DATABASE_URL"]
 }
 
 # ── APIs ─────────────────────────────────────────────────────────────────────
@@ -250,9 +257,17 @@ resource "google_cloud_run_v2_service" "api" {
         value = google_cloud_run_v2_service.web.uri
       }
 
-      # Secrets → env vars.
+      # DATABASE_URL is workspace-specific (different Cloud SQL instance and
+      # random_password per env), so it's set inline instead of bound from
+      # the shared Secret Manager entry below.
+      env {
+        name  = "DATABASE_URL"
+        value = local.database_url
+      }
+
+      # Secrets → env vars. DATABASE_URL is excluded — see local.api_secret_names.
       dynamic "env" {
-        for_each = toset(var.secret_names)
+        for_each = toset(local.api_secret_names)
         content {
           name = env.value
           value_source {
