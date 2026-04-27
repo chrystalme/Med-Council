@@ -57,6 +57,7 @@ from rate_limit import enforce_rate_limit, rate_limit_enabled
 from agents import (
     Agent,
     InputGuardrailTripwireTriggered,
+    OutputGuardrailTripwireTriggered,
     set_default_openai_api,
     set_default_openai_client,
     set_tracing_export_api_key,
@@ -375,6 +376,51 @@ app.add_middleware(
 )
 
 
+@app.exception_handler(OutputGuardrailTripwireTriggered)
+async def _output_guardrail_handler(
+    request: Request, exc: OutputGuardrailTripwireTriggered,
+):
+    """Translate output-guardrail tripwires into HTTP 422 with structured detail.
+
+    Mirror of the input-guardrail handler at the route level
+    (see /api/intake — InputGuardrailTripwireTriggered branch).
+
+    Top-level ``code`` is the stable value the frontend matches on
+    (``output_guardrail_failed``); ``subcode`` carries the specific check that
+    failed (e.g. ``consensus_icd_invalid``) for dashboards/QA without coupling
+    the FE to every variant. Specificity-based dispatch ensures this fires
+    before the generic Exception handler below.
+    """
+    from fastapi.responses import JSONResponse
+
+    res = exc.guardrail_result
+    info = res.output.output_info if isinstance(res.output.output_info, dict) else {}
+    agent_name = getattr(res.agent, "name", "unknown")
+    guardrail_name = res.guardrail.get_name()
+    subcode = info.get("code") or "output_guardrail_failed"
+    message = info.get("message") or (
+        "The model produced an invalid response for this stage. "
+        "Try again — and if the problem persists, switch to a different model."
+    )
+    log.warning(
+        "OutputGuardrail tripwire: agent=%s guardrail=%s subcode=%s path=%s",
+        agent_name, guardrail_name, subcode, request.url.path,
+    )
+    return JSONResponse(
+        status_code=422,
+        content={
+            "detail": {
+                "code": "output_guardrail_failed",
+                "subcode": subcode,
+                "message": message,
+                "stage": agent_name,
+                "guardrail": guardrail_name,
+                "failed_check": info.get("failed_check"),
+            },
+        },
+    )
+
+
 @app.exception_handler(Exception)
 async def _unhandled_exception_handler(request: Request, exc: Exception):
     """Last-resort handler so the frontend sees *what* broke instead of a bare 500.
@@ -487,7 +533,13 @@ def _resolve_runtime_model(agent: Agent, model: str | None):
     return _council_model_provider or MultiProvider(), effective if isinstance(effective, str) else None
 
 
-async def run_agent_raw(agent: Agent, prompt: str, *, model: str | None = None) -> Any:
+async def run_agent_raw(
+    agent: Agent,
+    prompt: str,
+    *,
+    model: str | None = None,
+    context: Any = None,
+) -> Any:
     """Run an agent and return `final_output`.
 
     Routes between Vertex (in-house) and OpenRouter (GPT-5 only) based on the
@@ -531,7 +583,7 @@ async def run_agent_raw(agent: Agent, prompt: str, *, model: str | None = None) 
     last_exc: BaseException | None = None
     for attempt in range(1, max_attempts + 1):
         try:
-            result = await Runner.run(run_agent, prompt, run_config=rc)
+            result = await Runner.run(run_agent, prompt, run_config=rc, context=context)
             return result.final_output
         except Exception as exc:
             last_exc = exc
@@ -578,9 +630,15 @@ async def run_agent_raw(agent: Agent, prompt: str, *, model: str | None = None) 
     raise last_exc
 
 
-async def run_agent(agent: Agent, prompt: str, *, model: str | None = None) -> str:
+async def run_agent(
+    agent: Agent,
+    prompt: str,
+    *,
+    model: str | None = None,
+    context: Any = None,
+) -> str:
     """Run an agent and return its final output as a string."""
-    output = await run_agent_raw(agent, prompt, model=model)
+    output = await run_agent_raw(agent, prompt, model=model, context=context)
     if isinstance(output, str):
         return output
     return output.model_dump_json() if hasattr(output, "model_dump_json") else str(output)
@@ -1620,6 +1678,26 @@ async def patient_message(
         f"Treatment plan:\n{req.plan}\n\n"
         f"Original patient symptoms: {req.symptoms}"
     )
+    # When the message guardrail trips on the disclaimer check, give the model
+    # one more shot with an explicit corrective hint instead of hard-failing.
+    # Disclaimer drift is the single most common message-stage trip and a
+    # second pass with the failure quoted back almost always succeeds. Other
+    # subcodes (e.g. message_introduces_unknown_diagnosis) are harder to
+    # self-correct, so they bubble straight to the global 422 handler.
+    _DISCLAIMER_RETRY_HINT = (
+        "\n\n---\n"
+        "CRITICAL CORRECTION REQUIRED — your previous response was rejected by "
+        "the output guardrail. The closing sentences MUST contain ALL of:\n"
+        "  (1) a reference to this being an AI advisory system (or AI guidance),\n"
+        "  (2) the words 'physician' / 'doctor' / 'clinician' / 'healthcare provider',\n"
+        "  (3) a verb like 'consult', 'see', 'speak', or 'talk to'.\n"
+        "Re-write the entire patient message so the FINAL sentence(s) clearly "
+        "satisfy all three. Do not add any prefatory note; produce the corrected "
+        "message directly."
+    )
+
+    retried = False
+    retry_reason: str | None = None
     with traced_workflow(
         "Patient Communication: Empathetic Summary",
         metadata={
@@ -1629,7 +1707,29 @@ async def patient_message(
             "symptoms": _truncate(req.symptoms),
         },
     ):
-        message = await run_agent(message_agent, prompt, model=model_slug)
+        try:
+            message = await run_agent(
+                message_agent,
+                prompt,
+                model=model_slug,
+                context={"consensus": req.consensus},
+            )
+        except OutputGuardrailTripwireTriggered as exc:
+            info = exc.guardrail_result.output.output_info
+            subcode = info.get("code") if isinstance(info, dict) else None
+            if subcode != "message_disclaimer_missing":
+                raise
+            log.info(
+                "Message disclaimer missing on first attempt; retrying with corrective hint"
+            )
+            retried = True
+            retry_reason = subcode
+            message = await run_agent(
+                message_agent,
+                prompt + _DISCLAIMER_RETRY_HINT,
+                model=model_slug,
+                context={"consensus": req.consensus},
+            )
 
     doctor_notify_status = "skipped"
     if (req.doctor_email or "").strip() and is_urgent(req.consensus):
@@ -1646,6 +1746,8 @@ async def patient_message(
         "message": message,
         "doctor_notified": doctor_notify_status == "sent",
         "doctor_notify_status": doctor_notify_status,
+        "retried": retried,
+        "retry_reason": retry_reason,
     }
 
 

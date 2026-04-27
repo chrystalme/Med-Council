@@ -9,7 +9,7 @@ from __future__ import annotations
 
 import json
 import re
-from typing import Annotated
+from typing import Annotated, Literal
 
 from pydantic import BaseModel, Field, ValidationError, field_validator
 
@@ -76,6 +76,26 @@ class IntakeFollowupOut(BaseModel):
             if not q.strip():
                 raise ValueError("Each question must be non-empty.")
         return v
+
+
+class ConsensusOut(BaseModel):
+    """Structured consensus output validated *inside* the consensus output guardrail.
+
+    Deliberately not set as ``consensus_agent.output_type`` — keeping the agent's
+    return type as a raw string preserves tolerance for fenced / prose JSON from
+    OpenRouter providers (same reason ``intake_agent`` does not set ``output_type``).
+    The guardrail parses the raw string, then validates with this model.
+    """
+
+    primaryDiagnosis: str
+    icdCode: str  # may be empty string when the model is uncertain — handled in the guardrail
+    confidence: int = Field(ge=0, le=100)
+    differentials: list[str]
+    prognosis: str
+    keyFindings: str
+    urgency: Literal["routine", "urgent", "emergent"]
+
+    model_config = {"extra": "allow"}  # ride out future field additions without tripping
 
 
 def _strip_json_fences(raw: str) -> str:
