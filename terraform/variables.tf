@@ -143,3 +143,9 @@ variable "web_max_instances" {
   type        = number
   default     = 10
 }
+
+variable "email_override_to" {
+  description = "If non-empty, every outgoing Resend email is rewritten to this recipient. Used in dev so we can stay on Resend's sandbox sender (onboarding@resend.dev) without verifying a domain — sandbox only delivers to the account-owner address. Leave empty in prod."
+  type        = string
+  default     = ""
+}

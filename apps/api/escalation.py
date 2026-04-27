@@ -57,6 +57,21 @@ def _mask_email(addr: str) -> str:
     return (local[:3] + "***@" + domain) if local else "***@" + domain
 
 
+def _resolve_recipient(addr: str) -> str:
+    """Honour EMAIL_OVERRIDE_TO so dev/sandbox envs can route every send to one
+    inbox without verifying a domain in Resend. Logs the redirect so the
+    intended recipient is still visible.
+    """
+    override = os.environ.get("EMAIL_OVERRIDE_TO", "").strip()
+    if override and override != (addr or "").strip():
+        log.info(
+            "EMAIL_OVERRIDE_TO active — redirecting %s -> %s",
+            _mask_email(addr), _mask_email(override),
+        )
+        return override
+    return addr
+
+
 def maybe_escalate_oncall(*, consensus: dict, symptoms: str) -> None:
     """
     Fire-and-forget email via Resend when RESEND_API_KEY and ONCALL_DOCTOR_EMAIL are set
@@ -99,7 +114,7 @@ def maybe_escalate_oncall(*, consensus: dict, symptoms: str) -> None:
     payload = json.dumps(
         {
             "from": from_addr,
-            "to": [to],
+            "to": [_resolve_recipient(to)],
             "subject": subject,
             "html": html,
         }
@@ -370,7 +385,7 @@ def notify_doctor_with_message(
 </body></html>"""
 
     payload = json.dumps(
-        {"from": from_addr, "to": [to], "subject": subject, "html": html}
+        {"from": from_addr, "to": [_resolve_recipient(to)], "subject": subject, "html": html}
     ).encode("utf-8")
 
     req = urllib.request.Request(
@@ -442,7 +457,7 @@ def send_patient_email(
 
     payload: dict = {
         "from": from_addr,
-        "to": [to],
+        "to": [_resolve_recipient(to)],
         "subject": subject,
         "html": html_body,
     }

@@ -15,3 +15,8 @@ min_instances     = 0
 max_instances     = 3
 web_min_instances = 0
 web_max_instances = 3
+
+# Sandbox sender (onboarding@resend.dev) only delivers to the Resend
+# account owner, so route every outgoing email here while we don't have
+# a verified domain.
+email_override_to = "afam.ifeanyi@gmail.com"
