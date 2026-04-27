@@ -1182,9 +1182,9 @@ export function CaseWorkspace() {
                       </span>
                     </div>
                   </div>
-                  <pre className='whitespace-pre-wrap font-sans text-[14.5px] text-ink-slate leading-relaxed'>
-                    {p.assessment}
-                  </pre>
+                  <div className='text-[14.5px] text-ink-slate leading-relaxed'>
+                    <Markdown>{p.assessment ?? ''}</Markdown>
+                  </div>
                 </li>
               ))}
             </ol>

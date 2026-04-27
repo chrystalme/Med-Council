@@ -407,6 +407,10 @@ Before writing, verify the plan is internally consistent and safe. Then write a 
 Requirements:
 - Plain accessible language (define medical terms immediately in parentheses)
 - Flowing prose paragraphs — absolutely NO bullet points or numbered lists
+- Use **bold** to emphasise key terms (warning signs, critical instructions). The
+  frontend renders Markdown, so feel free to use *italics* for gentle stress and
+  bold for safety-critical phrases. Avoid headings (#, ##) — they break the
+  conversational tone. No fenced code blocks.
 - Acknowledge the patient's specific symptoms by name to show they were heard
 - Clearly explain what the council found and what it means for daily life
 - Concrete next steps in natural priority order
