@@ -83,6 +83,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build and push api image
+        id: api_build
         uses: docker/build-push-action@v6
         with:
           context: apps/api
@@ -96,6 +97,7 @@ jobs:
           cache-to: type=gha,scope=api-${{ inputs.environment }},mode=max
 
       - name: Build and push web image
+        id: web_build
         uses: docker/build-push-action@v6
         with:
           context: .
@@ -130,15 +132,26 @@ jobs:
             terraform workspace select -or-create "$TF_WORKSPACE_NAME"
           fi
 
-      - name: Terraform apply (rolls api + web onto the new tag)
+      # Terraform pins Cloud Run to the immutable digest from this build
+      # rather than the SHA tag. Reruns rebuild with cache; if the digest
+      # ends up identical, Terraform is correctly a no-op. If anything
+      # changed (rebuild after a build-arg or cache invalidation), the new
+      # digest forces a revision roll. The SHA tag still gets pushed for
+      # human-readable lineage but is no longer the source of truth.
+      - name: Terraform apply (rolls api + web onto the new digest)
         working-directory: terraform
+        env:
+          API_DIGEST: ${{ steps.api_build.outputs.digest }}
+          WEB_DIGEST: ${{ steps.web_build.outputs.digest }}
         run: |
           terraform apply -input=false -auto-approve \
             -var-file="$TFVARS_FILE" \
             -var="project_id=${PROJECT_ID}" \
             -var="region=${REGION}" \
             -var="image_tag=${RESOLVED_TAG}" \
-            -var="web_image_tag=${RESOLVED_TAG}"
+            -var="web_image_tag=${RESOLVED_TAG}" \
+            -var="api_image_digest=${API_DIGEST}" \
+            -var="web_image_digest=${WEB_DIGEST}"
 
       - name: Report service URLs
         working-directory: terraform

@@ -28,8 +28,20 @@ variable "ar_repo" {
 }
 
 variable "image_tag" {
-  description = "Image tag to deploy (e.g. a git SHA). Required."
+  description = "Image tag to deploy (e.g. a git SHA). Used for human-readable lineage and as a fallback when image digests are not provided."
   type        = string
+}
+
+variable "api_image_digest" {
+  description = "Immutable image digest for the api image (e.g. 'sha256:...'). When set, Cloud Run pins the api revision by digest, which guarantees that any rerun-rebuild with new content rolls a new revision (and a no-op rebuild correctly stays a no-op). Empty falls back to image_tag."
+  type        = string
+  default     = ""
+}
+
+variable "web_image_digest" {
+  description = "Immutable image digest for the web image. Same semantics as api_image_digest."
+  type        = string
+  default     = ""
 }
 
 variable "db_instance_name" {

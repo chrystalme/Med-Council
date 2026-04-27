@@ -4,10 +4,18 @@ provider "google" {
 }
 
 locals {
-  bucket_name   = var.gcs_bucket_name != "" ? var.gcs_bucket_name : "${var.project_id}-medai-attachments${var.env_suffix}"
-  image_uri     = "${var.region}-docker.pkg.dev/${var.project_id}/${var.ar_repo}/api:${var.image_tag}"
+  bucket_name = var.gcs_bucket_name != "" ? var.gcs_bucket_name : "${var.project_id}-medai-attachments${var.env_suffix}"
+
+  # Cloud Run pins by digest at revision creation, so binding Terraform to
+  # the build's immutable digest is the only way to guarantee that a rerun
+  # which produces *different bytes under the same SHA tag* actually rolls
+  # a new revision. When the deploy workflow doesn't supply a digest (e.g.
+  # someone running terraform apply locally with just an image_tag), fall
+  # back to tag-based reference.
+  ar_base_uri   = "${var.region}-docker.pkg.dev/${var.project_id}/${var.ar_repo}"
+  image_uri     = var.api_image_digest != "" ? "${local.ar_base_uri}/api@${var.api_image_digest}" : "${local.ar_base_uri}/api:${var.image_tag}"
   web_image_tag = var.web_image_tag != "" ? var.web_image_tag : var.image_tag
-  web_image_uri = "${var.region}-docker.pkg.dev/${var.project_id}/${var.ar_repo}/web:${local.web_image_tag}"
+  web_image_uri = var.web_image_digest != "" ? "${local.ar_base_uri}/web@${var.web_image_digest}" : "${local.ar_base_uri}/web:${local.web_image_tag}"
 
   # DATABASE_URL must differ per workspace (each has its own Cloud SQL
   # instance + random_password). Build it inline rather than binding from the
