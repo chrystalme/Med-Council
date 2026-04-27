@@ -13,8 +13,20 @@ locals {
   # instance + random_password). Build it inline rather than binding from the
   # shared Secret Manager entry, which only carries the prod DSN. The legacy
   # DATABASE_URL secret container stays managed for now but is unused.
-  database_url     = "postgresql://${var.db_user}:${urlencode(random_password.db.result)}@/${var.db_name}?host=/cloudsql/${google_sql_database_instance.main.connection_name}"
-  api_secret_names = [for s in var.secret_names : s if s != "DATABASE_URL"]
+  database_url = "postgresql://${var.db_user}:${urlencode(random_password.db.result)}@/${var.db_name}?host=/cloudsql/${google_sql_database_instance.main.connection_name}"
+
+  # RESEND_FROM_EMAIL is bound per-workspace too: prod uses the shared
+  # Secret Manager entry; dev uses RESEND_FROM_EMAIL_DEV (created out-of-band
+  # via gcloud, IAM granted to the dev runtime SA) so we can point dev at a
+  # verified domain without touching the prod sender. The two env blocks
+  # below pick the right one; this local just holds the resolved name for
+  # comments / future re-use.
+  resend_from_secret_name = terraform.workspace == "dev" ? "RESEND_FROM_EMAIL_DEV" : "RESEND_FROM_EMAIL"
+
+  api_secret_names = [
+    for s in var.secret_names : s
+    if s != "DATABASE_URL" && s != "RESEND_FROM_EMAIL"
+  ]
 }
 
 # ── APIs ─────────────────────────────────────────────────────────────────────
@@ -265,7 +277,37 @@ resource "google_cloud_run_v2_service" "api" {
         value = local.database_url
       }
 
-      # Secrets → env vars. DATABASE_URL is excluded — see local.api_secret_names.
+      # RESEND_FROM_EMAIL is also per-workspace: dev binds to the
+      # out-of-band RESEND_FROM_EMAIL_DEV secret so we can use a verified
+      # domain in dev without rotating prod's sandbox sender.
+      dynamic "env" {
+        for_each = terraform.workspace == "dev" ? toset(["RESEND_FROM_EMAIL_DEV"]) : toset([])
+        content {
+          name = "RESEND_FROM_EMAIL"
+          value_source {
+            secret_key_ref {
+              secret  = env.value
+              version = "latest"
+            }
+          }
+        }
+      }
+
+      dynamic "env" {
+        for_each = terraform.workspace == "dev" ? toset([]) : toset(["RESEND_FROM_EMAIL"])
+        content {
+          name = "RESEND_FROM_EMAIL"
+          value_source {
+            secret_key_ref {
+              secret  = google_secret_manager_secret.secrets[env.value].secret_id
+              version = "latest"
+            }
+          }
+        }
+      }
+
+      # Secrets → env vars. DATABASE_URL and RESEND_FROM_EMAIL are excluded
+      # — see local.api_secret_names.
       dynamic "env" {
         for_each = toset(local.api_secret_names)
         content {
