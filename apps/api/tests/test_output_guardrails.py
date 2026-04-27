@@ -401,5 +401,124 @@ class ExceptionHandlerTest(unittest.TestCase):
         self.assertIn("Chen", body["detail"]["stage"])  # consensus agent name
 
 
+# ─────────────────────────────────────────────────────────────────────────────
+#  Integration: /api/message retries once on a disclaimer trip
+# ─────────────────────────────────────────────────────────────────────────────
+
+
+class MessageRetryOnDisclaimerTest(unittest.TestCase):
+    """When the message guardrail trips on `message_disclaimer_missing`,
+    the route must retry once with a corrective hint and surface
+    ``retried: true`` to the client. Other guardrail subcodes must still
+    bubble straight to the global 422 handler.
+    """
+
+    def _build_tripwire(self, code: str = "message_disclaimer_missing"):
+        from agents import GuardrailFunctionOutput, OutputGuardrailTripwireTriggered
+        from agents.guardrail import OutputGuardrailResult
+
+        import main as _main
+
+        fake_output = GuardrailFunctionOutput(
+            output_info={
+                "failed_check": "disclaimer",
+                "code": code,
+                "message": "test trip",
+                "passed": False,
+            },
+            tripwire_triggered=True,
+        )
+        return OutputGuardrailTripwireTriggered(
+            OutputGuardrailResult(
+                guardrail=g.message_guardrail,
+                agent_output="<raw>",
+                agent=_main.message_agent,
+                output=fake_output,
+            )
+        )
+
+    def _post_message(self, run_agent_side_effect):
+        from fastapi.testclient import TestClient
+        from auth import current_user_maybe_required
+
+        import main as _main
+
+        _main.app.dependency_overrides[current_user_maybe_required] = lambda: None
+        try:
+            with patch.object(_main, "run_agent", side_effect=run_agent_side_effect):
+                client = TestClient(_main.app)
+                return client.post(
+                    "/api/message",
+                    json={
+                        "symptoms": "Severe headache and photophobia",
+                        "consensus": {
+                            "primaryDiagnosis": "Migraine",
+                            "icdCode": "G43.909",
+                            "confidence": 80,
+                            "differentials": ["Tension headache"],
+                            "prognosis": "Good",
+                            "keyFindings": "Recurrent",
+                            "urgency": "routine",
+                        },
+                        "plan": "## IMMEDIATE ACTIONS\nHydrate.\n",
+                    },
+                )
+        finally:
+            _main.app.dependency_overrides.pop(current_user_maybe_required, None)
+
+    def test_disclaimer_trip_retries_once_and_succeeds(self) -> None:
+        tripwire = self._build_tripwire("message_disclaimer_missing")
+        calls: list[str] = []
+
+        async def _side_effect(_agent, prompt, **kwargs):
+            calls.append(prompt)
+            if len(calls) == 1:
+                raise tripwire
+            return "Corrected message body. Please consult a licensed physician about this AI advice."
+
+        resp = self._post_message(_side_effect)
+        self.assertEqual(resp.status_code, 200, resp.text)
+        body = resp.json()
+        self.assertTrue(body.get("retried"))
+        self.assertEqual(body.get("retry_reason"), "message_disclaimer_missing")
+        # Confirm the second prompt carries the corrective hint, not just the
+        # original — proves the LLM was actually told what to fix.
+        self.assertEqual(len(calls), 2)
+        self.assertIn("CRITICAL CORRECTION REQUIRED", calls[1])
+        self.assertNotIn("CRITICAL CORRECTION REQUIRED", calls[0])
+
+    def test_non_disclaimer_trip_does_not_retry(self) -> None:
+        # A schema or hallucination trip should NOT trigger the retry path —
+        # those are not self-correctable in a single re-prompt.
+        tripwire = self._build_tripwire("message_introduces_unknown_diagnosis")
+        calls = []
+
+        async def _side_effect(_agent, prompt, **kwargs):
+            calls.append(prompt)
+            raise tripwire
+
+        resp = self._post_message(_side_effect)
+        self.assertEqual(resp.status_code, 422)
+        self.assertEqual(len(calls), 1)  # one shot, not two
+        body = resp.json()
+        self.assertEqual(body["detail"]["code"], "output_guardrail_failed")
+        self.assertEqual(body["detail"]["subcode"], "message_introduces_unknown_diagnosis")
+
+    def test_retry_also_trips_returns_422(self) -> None:
+        # Both attempts trip the disclaimer check → no further retries; emit 422.
+        tripwire = self._build_tripwire("message_disclaimer_missing")
+        calls = []
+
+        async def _side_effect(_agent, prompt, **kwargs):
+            calls.append(prompt)
+            raise tripwire
+
+        resp = self._post_message(_side_effect)
+        self.assertEqual(resp.status_code, 422)
+        self.assertEqual(len(calls), 2)  # one retry, no more
+        body = resp.json()
+        self.assertEqual(body["detail"]["code"], "output_guardrail_failed")
+
+
 if __name__ == "__main__":
     unittest.main()

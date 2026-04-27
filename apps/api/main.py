@@ -1678,6 +1678,26 @@ async def patient_message(
         f"Treatment plan:\n{req.plan}\n\n"
         f"Original patient symptoms: {req.symptoms}"
     )
+    # When the message guardrail trips on the disclaimer check, give the model
+    # one more shot with an explicit corrective hint instead of hard-failing.
+    # Disclaimer drift is the single most common message-stage trip and a
+    # second pass with the failure quoted back almost always succeeds. Other
+    # subcodes (e.g. message_introduces_unknown_diagnosis) are harder to
+    # self-correct, so they bubble straight to the global 422 handler.
+    _DISCLAIMER_RETRY_HINT = (
+        "\n\n---\n"
+        "CRITICAL CORRECTION REQUIRED — your previous response was rejected by "
+        "the output guardrail. The closing sentences MUST contain ALL of:\n"
+        "  (1) a reference to this being an AI advisory system (or AI guidance),\n"
+        "  (2) the words 'physician' / 'doctor' / 'clinician' / 'healthcare provider',\n"
+        "  (3) a verb like 'consult', 'see', 'speak', or 'talk to'.\n"
+        "Re-write the entire patient message so the FINAL sentence(s) clearly "
+        "satisfy all three. Do not add any prefatory note; produce the corrected "
+        "message directly."
+    )
+
+    retried = False
+    retry_reason: str | None = None
     with traced_workflow(
         "Patient Communication: Empathetic Summary",
         metadata={
@@ -1687,12 +1707,29 @@ async def patient_message(
             "symptoms": _truncate(req.symptoms),
         },
     ):
-        message = await run_agent(
-            message_agent,
-            prompt,
-            model=model_slug,
-            context={"consensus": req.consensus},
-        )
+        try:
+            message = await run_agent(
+                message_agent,
+                prompt,
+                model=model_slug,
+                context={"consensus": req.consensus},
+            )
+        except OutputGuardrailTripwireTriggered as exc:
+            info = exc.guardrail_result.output.output_info
+            subcode = info.get("code") if isinstance(info, dict) else None
+            if subcode != "message_disclaimer_missing":
+                raise
+            log.info(
+                "Message disclaimer missing on first attempt; retrying with corrective hint"
+            )
+            retried = True
+            retry_reason = subcode
+            message = await run_agent(
+                message_agent,
+                prompt + _DISCLAIMER_RETRY_HINT,
+                model=model_slug,
+                context={"consensus": req.consensus},
+            )
 
     doctor_notify_status = "skipped"
     if (req.doctor_email or "").strip() and is_urgent(req.consensus):
@@ -1709,6 +1746,8 @@ async def patient_message(
         "message": message,
         "doctor_notified": doctor_notify_status == "sent",
         "doctor_notify_status": doctor_notify_status,
+        "retried": retried,
+        "retry_reason": retry_reason,
     }
 
 
