@@ -4,10 +4,10 @@ provider "google" {
 }
 
 locals {
-  bucket_name     = var.gcs_bucket_name != "" ? var.gcs_bucket_name : "${var.project_id}-medai-attachments"
-  image_uri       = "${var.region}-docker.pkg.dev/${var.project_id}/${var.ar_repo}/api:${var.image_tag}"
-  web_image_tag   = var.web_image_tag != "" ? var.web_image_tag : var.image_tag
-  web_image_uri   = "${var.region}-docker.pkg.dev/${var.project_id}/${var.ar_repo}/web:${local.web_image_tag}"
+  bucket_name   = var.gcs_bucket_name != "" ? var.gcs_bucket_name : "${var.project_id}-medai-attachments${var.env_suffix}"
+  image_uri     = "${var.region}-docker.pkg.dev/${var.project_id}/${var.ar_repo}/api:${var.image_tag}"
+  web_image_tag = var.web_image_tag != "" ? var.web_image_tag : var.image_tag
+  web_image_uri = "${var.region}-docker.pkg.dev/${var.project_id}/${var.ar_repo}/web:${local.web_image_tag}"
 }
 
 # ── APIs ─────────────────────────────────────────────────────────────────────
