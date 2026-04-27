@@ -33,7 +33,7 @@ medai-council/
 │       └── Dockerfile            Standalone output → Cloud Run
 ├── terraform/                    Cloud Run + Cloud SQL + GCS + Secret Manager
 ├── docker-compose.yml            Local pg + api + web
-├── .github/workflows/            ci.yml · deploy.yml · destroy.yml
+├── .github/workflows/            ci.yml · _deploy-gcp.yml · deploy-dev.yml · deploy-prod.yml · destroy.yml
 ├── DECISIONS.md                  Why each major choice was made
 ├── pnpm-workspace.yaml
 ├── package.json                  Monorepo root — pnpm workspace scripts
@@ -230,35 +230,31 @@ A follow-up Q&A loop is available at `POST /api/message/followup`.
 
 Terraform under `terraform/` provisions the full stack:
 
-- **Artifact Registry** — Docker repo for the API image.
+- **Artifact Registry** — Docker repo for api + web images.
 - **Cloud SQL (Postgres 15)** — `medai_council` database; pgvector is
   enabled by the API at startup.
 - **GCS bucket** — attachment blobs (when `STORAGE_BACKEND=gcs`).
-- **Cloud Run v2** — runs `apps/api/Dockerfile`, mounts the Cloud SQL socket
-  at `/cloudsql`, binds secrets from Secret Manager as env vars.
+- **Cloud Run v2** — two services (api + web), mounts the Cloud SQL socket
+  at `/cloudsql`, binds shared secrets from Secret Manager as env vars.
+  `DATABASE_URL` is built inline per workspace from Terraform values.
 - **Secret Manager** — container resources for `OPENROUTER_API_KEY`,
-  `OPENAI_API_KEY`, `CLERK_*`, `RESEND_*`, `DATABASE_URL`, etc. Values
-  provisioned after `terraform apply` (see `terraform/README.md`).
+  `OPENAI_API_KEY`, `CLERK_*`, `RESEND_*`, etc. Values provisioned
+  out-of-band via `apps/api/scripts/sync-secrets.sh`.
 
-Build + push + apply:
+### CI pipelines
 
-```bash
-REGION=us-central1
-PROJECT=$(gcloud config get-value project)
-TAG=$(git rev-parse --short HEAD)
+| Trigger | Pipeline | Workspace | Tfvars |
+| --- | --- | --- | --- |
+| push to `develop` | `Deploy (dev)` | `dev` | `terraform/env/dev.tfvars` |
+| push to `main` | `Deploy (production)` | `default` | `terraform/env/prod.tfvars` |
 
-gcloud auth configure-docker ${REGION}-docker.pkg.dev -q
-docker buildx build --platform linux/amd64 \
-  -f apps/api/Dockerfile \
-  -t ${REGION}-docker.pkg.dev/${PROJECT}/medai/api:${TAG} \
-  --push apps/api
+Both pipelines call the reusable `_deploy-gcp.yml`: build api + web images,
+push to Artifact Registry, then `terraform apply` against the requested
+workspace. Dev and prod share the same GCP project; per-workspace `env_suffix`
+keeps Cloud Run / Cloud SQL / GCS resource names distinct.
 
-cd terraform
-terraform init -backend-config="bucket=${PROJECT}-tfstate"
-terraform apply -var="project_id=${PROJECT}" -var="image_tag=${TAG}"
-```
-
-See `terraform/README.md` for first-time setup and secret population.
+See `terraform/README.md` for first-time setup, manual deploys, and secret
+population.
 
 ---
 
@@ -271,7 +267,7 @@ See `terraform/README.md` for first-time setup and secret population.
 - [x] **Step 4** — on-call email via Resend when consensus urgency is high \_(needs `RESEND\__` env)\*
 - [x] **Step 5** — optional `RATE_LIMIT_ENABLED` sliding window on `POST /api/*` _(SSE / parallel fan-out still open)_
 - [x] **Step 6** — paywall banner placeholder (`NEXT_PUBLIC_FEATURE_PAYWALL=1`) _(Stripe later)_
-- [ ] **Step 7** — GCP migration (Cloud Run + Cloud SQL + GCS)
+- [x] **Step 7** — GCP migration (Cloud Run + Cloud SQL + GCS) — dev + prod live
   - [x] Remove Vercel artefacts; target GCP Cloud Run
   - [x] Add `psycopg` + `alembic` + `google-cloud-storage`; introduce `db.py` and `storage.py` seams
   - [x] Port SQL sites in `main.py` / `council_tools.py` to Postgres (`%s`, `TIMESTAMPTZ`, `JSONB`)
@@ -279,9 +275,10 @@ See `terraform/README.md` for first-time setup and secret population.
   - [x] `attachments.py` → Postgres `bytea` (GCS swap stays stubbed for deploy step)
   - [x] Alembic scaffold + initial migration (`alembic/versions/0001_initial.py`); `alembic upgrade head` runs on container startup via `docker-entrypoint.sh`
   - [x] Speech provider swap (`SPEECH_PROVIDER=openai|gcloud|disabled`) with Groq-compatible base-URL override and structured 429 on quota exhaustion
-  - [ ] `GcsAttachmentStore` — move blobs to `storage.get_storage()`, keep metadata in Postgres
   - [x] Dockerfile (multi-stage, non-root, tini, runs migrations before uvicorn) at `apps/api/Dockerfile`
   - [x] Terraform (Cloud Run + Cloud SQL + pgvector + GCS + Secret Manager + Artifact Registry + Speech APIs) under `terraform/`
+  - [x] CI pipelines: `Deploy (dev)` on `develop`, `Deploy (production)` on `main`, sharing one GCP project via Terraform workspaces
+  - [ ] `GcsAttachmentStore` — move blobs to `storage.get_storage()`, keep metadata in Postgres
 
 ---
 
