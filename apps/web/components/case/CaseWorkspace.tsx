@@ -148,6 +148,10 @@ export function CaseWorkspace() {
   );
   const [plan, setPlan] = useState('');
   const [message, setMessage] = useState('');
+  // When the server retried the message stage to fix a guardrail trip
+  // (e.g. missing AI advisory disclaimer), this carries the subcode of the
+  // first attempt's failure so we can surface a small notice on the result.
+  const [messageRetryNotice, setMessageRetryNotice] = useState<string | null>(null);
   const [followupQ, setFollowupQ] = useState('');
   const [followupPrior, setFollowupPrior] = useState('');
   const [followupReply, setFollowupReply] = useState('');
@@ -583,12 +587,15 @@ export function CaseWorkspace() {
     }
     setErr(null);
     setBusy('Writing patient-facing summary…');
+    setMessageRetryNotice(null);
     const tok = await tokenFn();
     try {
       const data = await councilJson<{
         message: string;
         doctor_notified?: boolean;
         doctor_notify_status?: 'sent' | 'failed' | 'skipped';
+        retried?: boolean;
+        retry_reason?: string | null;
       }>(`/api/message`, {
         method: 'POST',
         token: tok,
@@ -601,6 +608,11 @@ export function CaseWorkspace() {
         }),
       });
       setMessage(data.message ?? '');
+      setMessageRetryNotice(
+        data.retried
+          ? data.retry_reason ?? 'message_disclaimer_missing'
+          : null,
+      );
       advanceTo(7);
     } catch (e) {
       setErr(formatCouncilError(e, 'Message'));
@@ -806,6 +818,7 @@ export function CaseWorkspace() {
     setConsensus(null);
     setPlan('');
     setMessage('');
+    setMessageRetryNotice(null);
     setErr(null);
     autoRunRef.current = { 2: false, 3: false, 4: false, 5: false, 6: false };
     setFollowupQ('');
@@ -1303,6 +1316,27 @@ export function CaseWorkspace() {
               message={message}
               onPaywallError={upgrade.show}
             />
+
+            {messageRetryNotice && (
+              <div
+                role='status'
+                aria-live='polite'
+                className='rounded-xl border border-cornflower bg-cornflower-soft/60 p-4 text-[14px] text-ink flex items-start gap-3'
+              >
+                <span aria-hidden className='mt-[2px]'>⟳</span>
+                <div>
+                  <p className='font-medium'>Trying again — corrected response below.</p>
+                  <p className='text-ink-slate text-[13px] mt-1'>
+                    The first attempt was rejected by the output guardrail
+                    {messageRetryNotice === 'message_disclaimer_missing'
+                      ? ' for missing the AI advisory disclaimer'
+                      : ` (${messageRetryNotice.replace(/_/g, ' ')})`}
+                    . The model was given the failure and re-wrote the
+                    message &mdash; this version is what is shown.
+                  </p>
+                </div>
+              </div>
+            )}
 
             <div className='rounded-xl border border-line bg-surface p-6'>
               <Markdown>{message}</Markdown>
