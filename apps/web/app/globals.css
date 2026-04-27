@@ -82,7 +82,7 @@
   --color-urgent:       var(--urgent);
   --color-urgent-soft:  var(--urgent-soft);
 
-  --font-sans:     var(--font-instrument-sans);
+  --font-sans:     var(--font-inter);
   --font-display:  var(--font-fraunces);
   --font-mono:     var(--font-jetbrains-mono);
 }
@@ -97,8 +97,13 @@ html, body {
 }
 
 body {
-  font-family: var(--font-instrument-sans), ui-sans-serif, system-ui, sans-serif;
-  font-feature-settings: "ss01", "cv11", "ss02";
+  font-family: var(--font-inter), ui-sans-serif, system-ui, sans-serif;
+  /* Inter legibility tuning: cv11 = single-storey 'a' alternates? no — keep
+     defaults; cv01-cv11 = stylistic variants. ss03 disambiguates 1/I/l. */
+  font-feature-settings: "cv11", "ss03", "tnum";
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  text-rendering: optimizeLegibility;
   /* Atlas grid — two superimposed layers: a fine dot mesh and coarser crossing hairlines. */
   background-color: var(--paper);
   background-image:
@@ -232,7 +237,7 @@ h1, h2, h3 {
   padding: 0 1.75rem;
   background: var(--indigo);
   color: var(--paper);
-  font-family: var(--font-instrument-sans), sans-serif;
+  font-family: var(--font-inter), sans-serif;
   font-weight: 500;
   font-size: 0.9375rem;
   letter-spacing: -0.005em;
@@ -258,7 +263,7 @@ h1, h2, h3 {
   padding: 0 1.5rem;
   background: transparent;
   color: var(--ink);
-  font-family: var(--font-instrument-sans), sans-serif;
+  font-family: var(--font-inter), sans-serif;
   font-weight: 500;
   font-size: 0.9375rem;
   border: 1px solid var(--line-strong);
@@ -529,7 +534,7 @@ input:disabled {
 }
 
 .prose-atlas h4 {
-  font-family: var(--font-instrument-sans), sans-serif;
+  font-family: var(--font-inter), sans-serif;
   font-size: 0.78rem;
   font-weight: 600;
   letter-spacing: 0.14em;
@@ -541,7 +546,7 @@ input:disabled {
 }
 
 .prose-atlas h5 {
-  font-family: var(--font-instrument-sans), sans-serif;
+  font-family: var(--font-inter), sans-serif;
   font-size: 0.875rem;
   font-weight: 600;
   letter-spacing: 0;
