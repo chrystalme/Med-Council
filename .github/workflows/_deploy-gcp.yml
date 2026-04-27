@@ -83,7 +83,7 @@ jobs:
         uses: docker/setup-buildx-action@v3
 
       - name: Build and push api image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: apps/api
           file: apps/api/Dockerfile
@@ -96,7 +96,7 @@ jobs:
           cache-to: type=gha,scope=api-${{ inputs.environment }},mode=max
 
       - name: Build and push web image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: apps/web/Dockerfile
