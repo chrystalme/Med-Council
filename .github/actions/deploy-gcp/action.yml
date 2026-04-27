@@ -1,0 +1,184 @@
+name: Deploy to GCP
+description: >
+  Build api + web images, push to Artifact Registry, then run
+  `terraform apply` against the requested workspace and tfvars file.
+  Composite action so it doesn't show up as a workflow in the Actions
+  tab; previously lived at .github/workflows/_deploy-gcp.yml.
+
+  Cloud Run is pinned to the immutable image digest (not the SHA tag)
+  so reruns or rebuilds with new content correctly roll a new revision.
+  See the Terraform apply step's comment for details.
+
+inputs:
+  environment:
+    description: GitHub environment name (informational; the calling job pins this via its own `environment:` field).
+    required: true
+  tf_workspace:
+    description: Terraform workspace name. Use 'default' for prod (preserves existing state).
+    required: true
+  tfvars_file:
+    description: Per-env tfvars path, relative to the terraform/ working directory.
+    required: true
+  image_latest_tag:
+    description: '"latest"-style tag pushed alongside :SHA (e.g. "latest", "dev-latest").'
+    required: true
+  image_tag_input:
+    description: Optional image tag override. Blank = commit SHA.
+    required: false
+    default: ''
+  project_id:
+    description: GCP project ID (typically vars.GCP_PROJECT_ID).
+    required: true
+  region:
+    description: GCP region for AR / Cloud Run / Cloud SQL.
+    required: true
+  tf_state_bucket:
+    description: GCS bucket holding the Terraform backend state.
+    required: true
+  api_base_url:
+    description: Value baked into the web image as NEXT_PUBLIC_API_BASE_URL / API_BASE_URL build args.
+    required: false
+    default: ''
+  workload_identity_provider:
+    description: Workload Identity Federation provider resource (secret).
+    required: true
+  deploy_sa:
+    description: Service account email the WIF run impersonates (secret).
+    required: true
+  next_public_clerk_publishable_key:
+    description: Publishable key baked into the web bundle at build time (secret).
+    required: false
+    default: ''
+
+runs:
+  using: composite
+  steps:
+    - name: Resolve image tag
+      shell: bash
+      env:
+        IMAGE_TAG_INPUT: ${{ inputs.image_tag_input }}
+        COMMIT_SHA: ${{ github.sha }}
+      run: |
+        if [ -n "$IMAGE_TAG_INPUT" ]; then
+          RESOLVED_TAG="$IMAGE_TAG_INPUT"
+        else
+          RESOLVED_TAG="$COMMIT_SHA"
+        fi
+        echo "RESOLVED_TAG=$RESOLVED_TAG" >> "$GITHUB_ENV"
+        echo "Resolved image tag: $RESOLVED_TAG"
+
+    - name: Auth to GCP
+      uses: google-github-actions/auth@v2
+      with:
+        workload_identity_provider: ${{ inputs.workload_identity_provider }}
+        service_account: ${{ inputs.deploy_sa }}
+        token_format: access_token
+
+    - name: Set up gcloud
+      uses: google-github-actions/setup-gcloud@v2
+      with:
+        project_id: ${{ inputs.project_id }}
+
+    - name: Configure Docker for Artifact Registry
+      shell: bash
+      run: gcloud auth configure-docker "${{ inputs.region }}-docker.pkg.dev" --quiet
+
+    - name: Set up Docker Buildx
+      uses: docker/setup-buildx-action@v3
+
+    - name: Build and push api image
+      id: api_build
+      uses: docker/build-push-action@v6
+      with:
+        context: apps/api
+        file: apps/api/Dockerfile
+        push: true
+        platforms: linux/amd64
+        tags: |
+          ${{ inputs.region }}-docker.pkg.dev/${{ inputs.project_id }}/medai/api:${{ env.RESOLVED_TAG }}
+          ${{ inputs.region }}-docker.pkg.dev/${{ inputs.project_id }}/medai/api:${{ inputs.image_latest_tag }}
+        cache-from: type=gha,scope=api-${{ inputs.environment }}
+        cache-to: type=gha,scope=api-${{ inputs.environment }},mode=max
+
+    - name: Build and push web image
+      id: web_build
+      uses: docker/build-push-action@v6
+      with:
+        context: .
+        file: apps/web/Dockerfile
+        push: true
+        platforms: linux/amd64
+        build-args: |
+          NEXT_PUBLIC_API_BASE_URL=${{ inputs.api_base_url }}
+          API_BASE_URL=${{ inputs.api_base_url }}
+          NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY=${{ inputs.next_public_clerk_publishable_key }}
+        tags: |
+          ${{ inputs.region }}-docker.pkg.dev/${{ inputs.project_id }}/medai/web:${{ env.RESOLVED_TAG }}
+          ${{ inputs.region }}-docker.pkg.dev/${{ inputs.project_id }}/medai/web:${{ inputs.image_latest_tag }}
+        cache-from: type=gha,scope=web-${{ inputs.environment }}
+        cache-to: type=gha,scope=web-${{ inputs.environment }},mode=max
+
+    - name: Set up Terraform
+      uses: hashicorp/setup-terraform@v3
+      with:
+        terraform_version: 1.9.0
+
+    - name: Terraform init
+      shell: bash
+      working-directory: terraform
+      run: terraform init -backend-config="bucket=${{ inputs.tf_state_bucket }}" -input=false
+
+    - name: Select Terraform workspace
+      shell: bash
+      working-directory: terraform
+      env:
+        TF_WORKSPACE_NAME: ${{ inputs.tf_workspace }}
+      run: |
+        if [ "$TF_WORKSPACE_NAME" = "default" ]; then
+          terraform workspace select default
+        else
+          terraform workspace select -or-create "$TF_WORKSPACE_NAME"
+        fi
+
+    # Cloud Run is pinned to the immutable digest from this build rather
+    # than the SHA tag. Reruns rebuild with cache; if the digest ends up
+    # identical, Terraform is correctly a no-op. If anything changed
+    # (rebuild after a build-arg or cache invalidation), the new digest
+    # forces a revision roll. The SHA tag still gets pushed for human-
+    # readable lineage but is no longer the source of truth.
+    - name: Terraform apply (rolls api + web onto the new digest)
+      shell: bash
+      working-directory: terraform
+      env:
+        API_DIGEST: ${{ steps.api_build.outputs.digest }}
+        WEB_DIGEST: ${{ steps.web_build.outputs.digest }}
+      run: |
+        terraform apply -input=false -auto-approve \
+          -var-file="${{ inputs.tfvars_file }}" \
+          -var="project_id=${{ inputs.project_id }}" \
+          -var="region=${{ inputs.region }}" \
+          -var="image_tag=${RESOLVED_TAG}" \
+          -var="web_image_tag=${RESOLVED_TAG}" \
+          -var="api_image_digest=${API_DIGEST}" \
+          -var="web_image_digest=${WEB_DIGEST}"
+
+    - name: Report service URLs
+      shell: bash
+      working-directory: terraform
+      env:
+        ENVIRONMENT: ${{ inputs.environment }}
+        TF_WORKSPACE_NAME: ${{ inputs.tf_workspace }}
+        REGION: ${{ inputs.region }}
+        PROJECT_ID: ${{ inputs.project_id }}
+      run: |
+        API_URL="$(terraform output -raw service_url 2>/dev/null || echo 'n/a')"
+        WEB_URL="$(terraform output -raw web_service_url 2>/dev/null || echo 'n/a')"
+        {
+          echo "### Deployment (${ENVIRONMENT})"
+          echo "- workspace: \`${TF_WORKSPACE_NAME}\`"
+          echo "- tag: \`${RESOLVED_TAG}\`"
+          echo "- api image: \`${REGION}-docker.pkg.dev/${PROJECT_ID}/medai/api:${RESOLVED_TAG}\`"
+          echo "- web image: \`${REGION}-docker.pkg.dev/${PROJECT_ID}/medai/web:${RESOLVED_TAG}\`"
+          echo "- api URL: ${API_URL}"
+          echo "- web URL: ${WEB_URL}"
+        } >> "$GITHUB_STEP_SUMMARY"

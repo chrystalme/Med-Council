@@ -2,7 +2,9 @@ name: Deploy (dev)
 
 # Auto-deploys to the dev Cloud Run services on every push to `develop`.
 # Targets the `dev` GitHub environment (separate vars/secrets, no approval
-# gate by default) and the `dev` Terraform workspace.
+# gate by default) and the `dev` Terraform workspace. The build/push/apply
+# logic lives in .github/actions/deploy-gcp (composite action) so it
+# doesn't appear as a separate workflow in the Actions tab.
 
 on:
   push:
@@ -24,11 +26,23 @@ permissions:
 
 jobs:
   dev:
-    uses: ./.github/workflows/_deploy-gcp.yml
-    with:
-      environment: dev
-      tf_workspace: dev
-      tfvars_file: env/dev.tfvars
-      image_latest_tag: dev-latest
-      image_tag_input: ${{ github.event.inputs.image_tag }}
-    secrets: inherit
+    name: Build, push, apply (dev)
+    runs-on: ubuntu-latest
+    environment: dev
+    steps:
+      - uses: actions/checkout@v4
+      - name: Deploy to GCP
+        uses: ./.github/actions/deploy-gcp
+        with:
+          environment: dev
+          tf_workspace: dev
+          tfvars_file: env/dev.tfvars
+          image_latest_tag: dev-latest
+          image_tag_input: ${{ github.event.inputs.image_tag }}
+          project_id: ${{ vars.GCP_PROJECT_ID }}
+          region: ${{ vars.GCP_REGION }}
+          tf_state_bucket: ${{ vars.GCP_TF_STATE_BUCKET }}
+          api_base_url: ${{ vars.API_BASE_URL }}
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          deploy_sa: ${{ secrets.GCP_DEPLOY_SA }}
+          next_public_clerk_publishable_key: ${{ secrets.NEXT_PUBLIC_CLERK_PUBLISHABLE_KEY }}
