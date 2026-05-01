@@ -30,7 +30,7 @@ jobs:
     runs-on: ubuntu-latest
     environment: dev
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v6
       - name: Deploy to GCP
         uses: ./.github/actions/deploy-gcp
         with:
