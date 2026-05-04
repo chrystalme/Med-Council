@@ -103,12 +103,12 @@ def maybe_escalate_oncall(*, consensus: dict, symptoms: str) -> None:
     subject = f"[MedAI Council] Escalation — {urg.upper()} urgency"
     dx = consensus.get("primaryDiagnosis") or consensus.get("primary_diagnosis") or "—"
     html = f"""
-    <p><strong>Urgency:</strong> {urg}</p>
-    <p><strong>Primary diagnosis (draft):</strong> {dx}</p>
+    <p><strong>Urgency:</strong> {_html.escape(str(urg))}</p>
+    <p><strong>Primary diagnosis (draft):</strong> {_html.escape(str(dx))}</p>
     <p><strong>Symptoms excerpt:</strong></p>
-    <pre style="white-space:pre-wrap;font-size:13px">{symptoms[:4000]}</pre>
+    <pre style="white-space:pre-wrap;font-size:13px">{_html.escape(str(symptoms)[:4000])}</pre>
     <p><strong>Full consensus JSON:</strong></p>
-    <pre style="white-space:pre-wrap;font-size:12px">{json.dumps(consensus, indent=2)[:12000]}</pre>
+    <pre style="white-space:pre-wrap;font-size:12px">{_html.escape(json.dumps(consensus, indent=2)[:12000])}</pre>
     """
 
     payload = json.dumps(
