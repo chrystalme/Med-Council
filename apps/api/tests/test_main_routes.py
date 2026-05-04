@@ -455,12 +455,12 @@ class CouncilSpecialistRouteTest(unittest.TestCase):
         self.client = _client()
 
     def _patch_run_agent(self, return_value: str):
-        import main as _main
+        from routers import council as _council_router
 
         async def _fake(*args, **kwargs):
             return return_value
 
-        return patch.object(_main, "run_agent", side_effect=_fake)
+        return patch.object(_council_router, "run_agent", side_effect=_fake)
 
     def test_returns_specialist_assessment(self) -> None:
         with self._patch_run_agent("Cardiology assessment: ACS likely."):
@@ -496,12 +496,12 @@ class CouncilPhysicianRouteTest(unittest.TestCase):
         self.client = _client()
 
     def test_returns_physician_assessment(self) -> None:
-        import main as _main
+        from routers import council as _council_router
 
         async def _fake(*args, **kwargs):
             return "Internal medicine: rule out ACS."
 
-        with patch.object(_main, "run_agent", side_effect=_fake):
+        with patch.object(_council_router, "run_agent", side_effect=_fake):
             r = self.client.post(
                 "/api/council/physician",
                 json={

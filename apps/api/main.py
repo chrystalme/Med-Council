@@ -278,6 +278,7 @@ app.add_middleware(
 
 # ── Routers (extracted from main.py) ────────────────────────────────────────
 from routers import cases as _cases_router  # noqa: E402
+from routers import council as _council_router  # noqa: E402
 from routers import feedback as _feedback_router  # noqa: E402
 from routers import intake as _intake_router  # noqa: E402
 from routers import meta as _meta_router  # noqa: E402
@@ -288,6 +289,7 @@ app.include_router(_feedback_router.router)
 app.include_router(_cases_router.router)
 app.include_router(_intake_router.router)
 app.include_router(_triage_router.router)
+app.include_router(_council_router.router)
 
 
 @app.exception_handler(OutputGuardrailTripwireTriggered)
@@ -434,110 +436,8 @@ from helpers import (  # noqa: E402
 #  Stage 3 — Physician Council (one call per specialist)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _council_context_block(council_context: str) -> str:
-    t = (council_context or "").strip()
-    if not t:
-        return ""
-    return f"\n\nDeliberation lead framing (use alongside the chart):\n{t}"
-
-
-@app.post("/api/council/specialist")
-async def council_specialist(
-    req: SpecialistIn,
-    response: Response,
-    user: Optional[AuthUser] = Depends(current_user_maybe_required),
-):
-    model_slug = _resolve_for_request(req, user, response)
-    if req.specialist_id not in SPECIALIST_AGENTS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unknown specialist_id '{req.specialist_id}'. Valid: {ALL_SPECIALIST_IDS}",
-        )
-
-    prior_block = ""
-    if req.prior_assessments:
-        prior_block = "\n\nColleague assessments (read carefully before responding):\n" + "\n\n".join(
-            f"--- {a['name']} ({a['specialty']}) ---\n{a['assessment']}"
-            for a in req.prior_assessments
-        )
-
-    ctx = _council_context_block(req.council_context)
-    memory = _retrieve_patient_context(_cases_user_id(user), req.symptoms)
-    prompt = (
-        f"Patient symptoms: {req.symptoms}\n\n"
-        f"Patient follow-up responses: {req.followup_answers}"
-        f"{ctx}"
-        f"{prior_block}"
-        + (f"\n\n{memory}" if memory else "")
-    )
-
-    specialist_name = SPECIALIST_META[req.specialist_id]["name"]
-    with traced_workflow(
-        f"Specialist Assessment: {specialist_name}",
-        metadata={
-            "stage": "3-council",
-            "specialist_id": req.specialist_id,
-            "specialist_name": specialist_name,
-            "prior_assessment_count": len(req.prior_assessments),
-            "symptoms": _truncate(req.symptoms),
-        },
-    ):
-        assessment = await run_agent(SPECIALIST_AGENTS[req.specialist_id], prompt, model=model_slug)
-    return {
-        "specialist": {"id": req.specialist_id, **SPECIALIST_META[req.specialist_id]},
-        "assessment": assessment,
-    }
-
-
-@app.post("/api/council/physician")
-async def council_physician(
-    req: PhysicianIn,
-    response: Response,
-    user: Optional[AuthUser] = Depends(current_user_maybe_required),
-):
-    """Alias for council_specialist to match frontend naming (physician_id instead of specialist_id)"""
-    model_slug = _resolve_for_request(req, user, response)
-    if req.physician_id not in SPECIALIST_AGENTS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unknown physician_id '{req.physician_id}'. Valid: {ALL_SPECIALIST_IDS}",
-        )
-
-    prior_block = ""
-    if req.prior_assessments:
-        prior_block = "\n\nColleague assessments (read carefully before responding):\n" + "\n\n".join(
-            f"--- {a['name']} ({a['specialty']}) ---\n{a['assessment']}"
-            for a in req.prior_assessments
-        )
-
-    ctx = _council_context_block(req.council_context)
-    memory = _retrieve_patient_context(_cases_user_id(user), req.symptoms)
-    attachments_block = _attachment_block_for_case(req.case_id, _cases_user_id(user)) if req.case_id else ""
-    prompt = (
-        f"Patient symptoms: {req.symptoms}\n\n"
-        f"Patient follow-up responses: {req.followup_answers}"
-        f"{ctx}"
-        f"{prior_block}"
-        + (f"\n\n{attachments_block}" if attachments_block else "")
-        + (f"\n\n{memory}" if memory else "")
-    )
-
-    specialist_name = SPECIALIST_META[req.physician_id]["name"]
-    with traced_workflow(
-        f"Specialist Assessment: {specialist_name}",
-        metadata={
-            "stage": "3-council",
-            "specialist_id": req.physician_id,
-            "specialist_name": specialist_name,
-            "prior_assessment_count": len(req.prior_assessments),
-            "symptoms": _truncate(req.symptoms),
-        },
-    ):
-        assessment = await run_agent(SPECIALIST_AGENTS[req.physician_id], prompt, model=model_slug)
-    return {
-        "specialist": {"id": req.physician_id, **SPECIALIST_META[req.physician_id]},
-        "assessment": assessment,
-    }
+# Stage 3 — /api/council/specialist and /api/council/physician live in routers/council.py.
+# _council_context_block lives there too.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1174,52 +1074,8 @@ async def delete_consultation(
         con.close()
 
 
-def _retrieve_patient_context(user_id: str, query: str, top_k: int = 3) -> str:
-    """Return a plain-text block of similar prior consultations for injection into agent prompts.
-
-    Returns "" when the user has no prior consultations or embedding fails —
-    callers can unconditionally concatenate the result.
-    """
-    if not user_id or not (query or "").strip():
-        return ""
-    from embeddings import get_embedding_provider
-    from vector_store import get_vector_store
-
-    con = _get_db()
-    try:
-        try:
-            vec = get_embedding_provider().embed(query)
-            hits = get_vector_store().query(
-                con,
-                embedding=vec,
-                top_k=top_k,
-                where={"user_id": user_id},
-            )
-        except Exception as exc:
-            log.warning("patient context retrieval failed: %s", exc)
-            return ""
-
-        if not hits:
-            return ""
-
-        lines = ["--- Patient's prior consultations (most relevant first) ---"]
-        for h in hits:
-            meta = h.metadata or {}
-            date = str(meta.get("created_at") or "")[:10]
-            dx = meta.get("primary_dx") or "—"
-            urgency = meta.get("urgency") or ""
-            conf = meta.get("confidence") or 0
-            score_pct = int(round(h.score * 100))
-            document = (h.document or "").strip()
-            if len(document) > MAX_RETRIEVED_CONSULTATION_CHARS:
-                document = document[:MAX_RETRIEVED_CONSULTATION_CHARS].rstrip() + "\n[truncated]"
-            lines.append(
-                f"[{date} · {dx} (confidence {conf}%, {urgency}) · match {score_pct}%]\n{document}"
-            )
-        lines.append("---")
-        return "\n\n".join(lines)
-    finally:
-        con.close()
+# _retrieve_patient_context moved to case_context.py; aliased below.
+from case_context import retrieve_patient_context as _retrieve_patient_context  # noqa: E402
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1227,42 +1083,8 @@ def _retrieve_patient_context(user_id: str, query: str, top_k: int = 3) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _attachment_block_for_case(
-    case_id: str,
-    user_id: str,
-    question_texts: list[str] | None = None,
-) -> str:
-    """Read attachments for a case and render as a prompt-safe text block.
-
-    Ownership is enforced at write time by `create_attachment` (the case is
-    verified to belong to the requesting user before save). The per-row
-    user_id filter below is the single read-time check — sufficient because
-    a row exists with `user_id != requesting_user` only if either save's
-    ownership check was skipped or somebody wrote rows out-of-band, both of
-    which fall back to "filter rejects all rows → empty block".
-
-    Previously this function also ran a `SELECT id FROM cases WHERE id=%s
-    AND user_id=%s` upfront. Dropped — that query duplicated the per-row
-    filter, added a round-trip per agent stage, and was the dominant cost
-    on Cloud Run cold starts (~5–10ms × stages).
-    """
-    from attachments import format_attachment_block, get_attachment_store
-
-    if not user_id:
-        return ""
-
-    con = _get_db()
-    try:
-        rows = [
-            row
-            for row in get_attachment_store().list_for_case(con, case_id)
-            if row.user_id == user_id
-        ]
-    except NotImplementedError:
-        return ""
-    finally:
-        con.close()
-    return format_attachment_block(rows, question_texts)
+# _attachment_block_for_case moved to case_context.py; aliased below.
+from case_context import attachment_block_for_case as _attachment_block_for_case  # noqa: E402
 
 
 @app.post("/api/cases/{case_id}/attachments")
