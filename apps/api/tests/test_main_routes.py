@@ -244,11 +244,14 @@ class FeedbackRouteTest(unittest.TestCase):
         self._db_patch.start()
         self.addCleanup(self._db_patch.stop)
 
-        # Feedback route runs the agent — stub it so no model is invoked.
+        # Feedback route lives in routers/feedback.py post-Refactor 4 — patch
+        # run_agent on that module's namespace so no model is invoked.
         async def _fake_run_agent(*args, **kwargs):
             return "thanks for the feedback"
 
-        self._agent_patch = patch.object(_main, "run_agent", side_effect=_fake_run_agent)
+        from routers import feedback as _feedback_router
+
+        self._agent_patch = patch.object(_feedback_router, "run_agent", side_effect=_fake_run_agent)
         self._agent_patch.start()
         self.addCleanup(self._agent_patch.stop)
 
