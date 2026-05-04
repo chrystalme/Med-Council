@@ -278,12 +278,24 @@ app.add_middleware(
 
 # ── Routers (extracted from main.py) ────────────────────────────────────────
 from routers import cases as _cases_router  # noqa: E402
+from routers import consensus_plan as _consensus_plan_router  # noqa: E402
+from routers import council as _council_router  # noqa: E402
 from routers import feedback as _feedback_router  # noqa: E402
+from routers import intake as _intake_router  # noqa: E402
+from routers import message as _message_router  # noqa: E402
 from routers import meta as _meta_router  # noqa: E402
+from routers import research as _research_router  # noqa: E402
+from routers import triage as _triage_router  # noqa: E402
 
 app.include_router(_meta_router.router)
 app.include_router(_feedback_router.router)
 app.include_router(_cases_router.router)
+app.include_router(_intake_router.router)
+app.include_router(_triage_router.router)
+app.include_router(_council_router.router)
+app.include_router(_research_router.router)
+app.include_router(_consensus_plan_router.router)
+app.include_router(_message_router.router)
 
 
 @app.exception_handler(OutputGuardrailTripwireTriggered)
@@ -420,546 +432,31 @@ from helpers import (  # noqa: E402
 #  Stage 1 — Intake
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.post("/api/intake/followup")
-async def intake_followup(
-    req: SymptomsIn,
-    response: Response,
-    user: Optional[AuthUser] = Depends(current_user_maybe_required),
-):
-    model_slug = _resolve_for_request(req, user, response)
-    try:
-        with traced_workflow(
-            "Intake Follow-up Questions",
-            metadata={"stage": "1-intake", "symptoms": _truncate(req.symptoms)},
-        ):
-            raw_text = await run_agent(
-                intake_agent,
-                f"Patient self-reports: {req.symptoms}",
-                model=model_slug,
-            )
-    except InputGuardrailTripwireTriggered as e:
-        info = e.guardrail_result.output.output_info if e.guardrail_result.output else {}
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": "non_medical_input",
-                "message": (
-                    "This service is designed for medical questions only. "
-                    "Please describe a health concern, symptom, or medical situation."
-                ),
-                "reasoning": info.get("reasoning", ""),
-            },
-        ) from e
-    try:
-        return {"questions": _format_intake_questions_for_api(raw_text)}
-    except ValueError as e:
-        raise HTTPException(status_code=502, detail=str(e)) from e
+# /api/intake/followup lives in routers/intake.py.
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Stage 2 — Triage
-# ─────────────────────────────────────────────────────────────────────────────
-
-@app.post("/api/triage")
-async def triage(
-    req: TriageIn,
-    response: Response,
-    user: Optional[AuthUser] = Depends(current_user_maybe_required),
-):
-    model_slug = _resolve_for_request(req, user, response)
-    prompt = (
-        f"Patient symptoms: {req.symptoms}\n\n"
-        f"Patient follow-up responses: {req.followup_answers}"
-    )
-    with traced_workflow(
-        "Triage: Specialist Selection",
-        metadata={"stage": "2-triage", "symptoms": _truncate(req.symptoms)},
-    ):
-        raw = await run_agent(triage_agent, prompt, model=model_slug)
-
-    try:
-        data = parse_json(raw)
-    except ValueError as e:
-        raise HTTPException(status_code=502, detail=str(e))
-
-    # Validate and normalise selected specialist IDs
-    raw_ids: list[str] = data.get("selected_specialists", [])
-    valid_ids = [sid for sid in raw_ids if sid in ALL_SPECIALIST_IDS]
-    if "internal_medicine" not in valid_ids:
-        valid_ids.insert(0, "internal_medicine")
-
-    specialists = [{"id": sid, **SPECIALIST_META[sid]} for sid in valid_ids]
-
-    return {
-        "selected_specialist_ids": valid_ids,
-        "specialists": specialists,
-        "reasoning": data.get("reasoning", ""),
-        "urgency_flag": data.get("urgency_flag", "routine"),
-    }
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Stage 2b — Deliberation Expert Selection (optional alternative to triage)
-# ─────────────────────────────────────────────────────────────────────────────
-
-@app.post("/api/deliberation/select-experts")
-async def select_deliberation_experts(
-    req: TriageIn,
-    response: Response,
-    user: Optional[AuthUser] = Depends(current_user_maybe_required),
-):
-    """Select 4–6 expert specialists for structured deliberation (symptoms + follow-up answers)."""
-    model_slug = _resolve_for_request(req, user, response)
-    prompt = (
-        f"Patient symptoms: {req.symptoms}\n\n"
-        f"Patient follow-up responses: {req.followup_answers}"
-    )
-    with traced_workflow(
-        "Expert Selection for Deliberation",
-        metadata={"stage": "2b-deliberation-select", "symptoms": _truncate(req.symptoms)},
-    ):
-        raw = await run_agent(deliberation_selector_agent, prompt, model=model_slug)
-
-    try:
-        data = parse_json(raw)
-    except ValueError as e:
-        raise HTTPException(status_code=502, detail=str(e))
-
-    # Validate expert IDs
-    expert_ids: list[str] = data.get("deliberation_experts", [])
-    valid_ids = [sid for sid in expert_ids if sid in ALL_SPECIALIST_IDS]
-
-    # Ensure internal_medicine is included
-    if "internal_medicine" not in valid_ids:
-        valid_ids.insert(0, "internal_medicine")
-
-    # Ensure pharmacology if medications mentioned
-    case_text = f"{req.symptoms}\n{req.followup_answers}".lower()
-    has_medication_keywords = any(
-        keyword in case_text
-        for keyword in ["medication", "drug", "medicine", "taking", "takes", "prescribed", "pill", "tablet"]
-    )
-    _min, _max = 4, 6
-    if has_medication_keywords and "pharmacology" not in valid_ids and len(valid_ids) < _max:
-        valid_ids.insert(1, "pharmacology")
-
-    # Enforce 4–6 specialists
-    if len(valid_ids) < _min:
-        for sid in ALL_SPECIALIST_IDS:
-            if sid not in valid_ids and len(valid_ids) < _min:
-                valid_ids.append(sid)
-    elif len(valid_ids) > _max:
-        valid_ids = valid_ids[:_max]
-
-    experts = [{"id": sid, **SPECIALIST_META[sid]} for sid in valid_ids]
-
-    # Print detailed selection information
-    print("\n" + "="*80)
-    print("[DELIBERATION EXPERT SELECTION]")
-    print("="*80)
-    print(f"Patient Symptoms: {req.symptoms}")
-    print(f"\nReason for Selection:\n{data.get('reason_for_selection', 'No rationale provided')}")
-    print(f"\nCase Summary: {data.get('case_summary', 'N/A')}")
-    print(f"\nSelected Experts ({len(valid_ids)} total):")
-    for i, expert in enumerate(experts, 1):
-        print(f"  {i}. {expert['name']} ({expert['specialty']})")
-    print(f"\nFocus Areas: {', '.join(data.get('focus_areas', []))}")
-    print("="*80 + "\n")
-
-    # Format expert selection for display
-    expert_display = "\n".join(
-        f"• **{expert['name']}** — {expert['specialty']}"
-        for expert in experts
-    )
-
-    return {
-        "deliberation_experts": valid_ids,
-        "experts": experts,
-        "reason_for_selection": data.get("reason_for_selection", ""),
-        "case_summary": data.get("case_summary", ""),
-        "focus_areas": data.get("focus_areas", []),
-        "display_text": f"**Selected Deliberation Experts ({len(valid_ids)} members)**\n\n{expert_display}\n\n**Reason for Selection:**\n{data.get('reason_for_selection', '')}\n\n**Case Focus:**\n{data.get('case_summary', '')}",
-    }
+# Stage 2 — /api/triage and /api/deliberation/select-experts live in routers/triage.py.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Stage 3 — Physician Council (one call per specialist)
 # ─────────────────────────────────────────────────────────────────────────────
 
-def _council_context_block(council_context: str) -> str:
-    t = (council_context or "").strip()
-    if not t:
-        return ""
-    return f"\n\nDeliberation lead framing (use alongside the chart):\n{t}"
-
-
-@app.post("/api/council/specialist")
-async def council_specialist(
-    req: SpecialistIn,
-    response: Response,
-    user: Optional[AuthUser] = Depends(current_user_maybe_required),
-):
-    model_slug = _resolve_for_request(req, user, response)
-    if req.specialist_id not in SPECIALIST_AGENTS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unknown specialist_id '{req.specialist_id}'. Valid: {ALL_SPECIALIST_IDS}",
-        )
-
-    prior_block = ""
-    if req.prior_assessments:
-        prior_block = "\n\nColleague assessments (read carefully before responding):\n" + "\n\n".join(
-            f"--- {a['name']} ({a['specialty']}) ---\n{a['assessment']}"
-            for a in req.prior_assessments
-        )
-
-    ctx = _council_context_block(req.council_context)
-    memory = _retrieve_patient_context(_cases_user_id(user), req.symptoms)
-    prompt = (
-        f"Patient symptoms: {req.symptoms}\n\n"
-        f"Patient follow-up responses: {req.followup_answers}"
-        f"{ctx}"
-        f"{prior_block}"
-        + (f"\n\n{memory}" if memory else "")
-    )
-
-    specialist_name = SPECIALIST_META[req.specialist_id]["name"]
-    with traced_workflow(
-        f"Specialist Assessment: {specialist_name}",
-        metadata={
-            "stage": "3-council",
-            "specialist_id": req.specialist_id,
-            "specialist_name": specialist_name,
-            "prior_assessment_count": len(req.prior_assessments),
-            "symptoms": _truncate(req.symptoms),
-        },
-    ):
-        assessment = await run_agent(SPECIALIST_AGENTS[req.specialist_id], prompt, model=model_slug)
-    return {
-        "specialist": {"id": req.specialist_id, **SPECIALIST_META[req.specialist_id]},
-        "assessment": assessment,
-    }
-
-
-@app.post("/api/council/physician")
-async def council_physician(
-    req: PhysicianIn,
-    response: Response,
-    user: Optional[AuthUser] = Depends(current_user_maybe_required),
-):
-    """Alias for council_specialist to match frontend naming (physician_id instead of specialist_id)"""
-    model_slug = _resolve_for_request(req, user, response)
-    if req.physician_id not in SPECIALIST_AGENTS:
-        raise HTTPException(
-            status_code=400,
-            detail=f"Unknown physician_id '{req.physician_id}'. Valid: {ALL_SPECIALIST_IDS}",
-        )
-
-    prior_block = ""
-    if req.prior_assessments:
-        prior_block = "\n\nColleague assessments (read carefully before responding):\n" + "\n\n".join(
-            f"--- {a['name']} ({a['specialty']}) ---\n{a['assessment']}"
-            for a in req.prior_assessments
-        )
-
-    ctx = _council_context_block(req.council_context)
-    memory = _retrieve_patient_context(_cases_user_id(user), req.symptoms)
-    attachments_block = _attachment_block_for_case(req.case_id, _cases_user_id(user)) if req.case_id else ""
-    prompt = (
-        f"Patient symptoms: {req.symptoms}\n\n"
-        f"Patient follow-up responses: {req.followup_answers}"
-        f"{ctx}"
-        f"{prior_block}"
-        + (f"\n\n{attachments_block}" if attachments_block else "")
-        + (f"\n\n{memory}" if memory else "")
-    )
-
-    specialist_name = SPECIALIST_META[req.physician_id]["name"]
-    with traced_workflow(
-        f"Specialist Assessment: {specialist_name}",
-        metadata={
-            "stage": "3-council",
-            "specialist_id": req.physician_id,
-            "specialist_name": specialist_name,
-            "prior_assessment_count": len(req.prior_assessments),
-            "symptoms": _truncate(req.symptoms),
-        },
-    ):
-        assessment = await run_agent(SPECIALIST_AGENTS[req.physician_id], prompt, model=model_slug)
-    return {
-        "specialist": {"id": req.physician_id, **SPECIALIST_META[req.physician_id]},
-        "assessment": assessment,
-    }
+# Stage 3 — /api/council/specialist and /api/council/physician live in routers/council.py.
+# _council_context_block lives there too.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Stage 4 — Research
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.post("/api/research")
-async def research(
-    req: ResearchIn,
-    response: Response,
-    user: Optional[AuthUser] = Depends(current_user_maybe_required),
-):
-    model_slug = _resolve_for_request(req, user, response)
-    assessments_text = "\n\n".join(
-        f"{a['name']} ({a['specialty']}):\n{a['assessment']}" for a in req.assessments
-    )
-    prompt = (
-        f"Patient symptoms: {req.symptoms}\n\n"
-        f"Follow-up responses: {req.followup_answers}\n\n"
-        f"Team assessments:\n{assessments_text}"
-    )
-    with traced_workflow(
-        "Research: Evidence-Based Paper Selection",
-        metadata={
-            "stage": "4-research",
-            "assessment_count": len(req.assessments),
-            "symptoms": _truncate(req.symptoms),
-        },
-    ):
-        raw = await run_agent(research_agent, prompt, model=model_slug)
-
-    with custom_span("parse_research_papers", data={"source": "model_output"}):
-        papers, parse_warning = parse_research_papers(raw)
-
-    # Failsafe: if the model didn't return a usable papers array (or produced narrative-only output),
-    # fetch real PubMed links based on the case text so the UI always has actionable references.
-    has_any_links = any(bool((p or {}).get("url")) for p in (papers or []))
-    if not has_any_links:
-        try:
-            with custom_span("pubmed_fallback_search", data={"reason": "no_urls_in_model_output"}):
-                pubmed_term = f"{req.symptoms}\n{req.followup_answers}\n{assessments_text}"
-                pubmed_papers = _pubmed_search_papers(pubmed_term, retmax=4)
-            if pubmed_papers:
-                papers = pubmed_papers
-                parse_warning = (
-                    (parse_warning + " " if parse_warning else "")
-                    + "Recovered PubMed links via direct search fallback."
-                )
-        except Exception as exc:
-            # NCBI rate-limits + network timeouts shouldn't fail the whole research stage.
-            log.warning("pubmed fallback search failed: %s", exc)
-            parse_warning = (
-                (parse_warning + " " if parse_warning else "")
-                + "PubMed fallback unavailable."
-            )
-
-    return {"papers": papers, "parse_warning": parse_warning}
+# Stage 4 — /api/research lives in routers/research.py.
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Stage 5 — Consensus / Diagnosis
-# ─────────────────────────────────────────────────────────────────────────────
-
-@app.post("/api/consensus")
-async def consensus(
-    req: ConsensusIn,
-    response: Response,
-    user: Optional[AuthUser] = Depends(current_user_maybe_required),
-):
-    model_slug = _resolve_for_request(req, user, response)
-    assessments_text = "\n\n".join(
-        f"{a['name']} ({a['specialty']}):\n{a['assessment']}" for a in req.assessments
-    )
-    research_text = "\n".join(
-        f"• {r.get('title','')} ({r.get('year','')}): {r.get('summary','')}"
-        for r in req.research
-    )
-    memory = _retrieve_patient_context(_cases_user_id(user), req.symptoms)
-    attachments_block = _attachment_block_for_case(req.case_id, _cases_user_id(user)) if req.case_id else ""
-    prompt = (
-        f"Patient symptoms: {req.symptoms}\n\n"
-        f"Follow-up responses: {req.followup_answers}\n\n"
-        f"Specialist assessments:\n{assessments_text}\n\n"
-        f"Supporting research:\n{research_text}"
-        + (f"\n\n{attachments_block}" if attachments_block else "")
-        + (f"\n\n{memory}" if memory else "")
-    )
-    with traced_workflow(
-        "Consensus: Integrating Multidisciplinary Assessment",
-        metadata={
-            "stage": "5-consensus",
-            "assessment_count": len(req.assessments),
-            "research_paper_count": len(req.research),
-            "symptoms": _truncate(req.symptoms),
-        },
-    ):
-        raw = await run_agent(consensus_agent, prompt, model=model_slug)
-
-    try:
-        data = parse_json(raw)
-    except ValueError as e:
-        raise HTTPException(status_code=502, detail=str(e)) from e
-
-    if isinstance(data, dict):
-        asyncio.create_task(
-            asyncio.to_thread(
-                maybe_escalate_oncall,
-                consensus=data,
-                symptoms=req.symptoms,
-            )
-        )
-
-    return {"consensus": data}
+# Stages 5 + 6 — /api/consensus and /api/plan live in routers/consensus_plan.py.
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Stage 6 — Treatment Plan
-# ─────────────────────────────────────────────────────────────────────────────
-
-@app.post("/api/plan")
-async def plan(
-    req: PlanIn,
-    response: Response,
-    user: Optional[AuthUser] = Depends(current_user_maybe_required),
-):
-    model_slug = _resolve_for_request(req, user, response)
-    assessments_text = "\n\n".join(
-        f"{a['name']} ({a['specialty']}):\n{a['assessment']}" for a in req.assessments
-    )
-    memory = _retrieve_patient_context(_cases_user_id(user), req.symptoms)
-    attachments_block = _attachment_block_for_case(req.case_id, _cases_user_id(user)) if req.case_id else ""
-    prompt = (
-        f"Diagnosis: {json.dumps(req.consensus)}\n\n"
-        f"Patient symptoms: {req.symptoms}\n\n"
-        f"Follow-up responses: {req.followup_answers}\n\n"
-        f"Specialist findings:\n{assessments_text}"
-        + (f"\n\n{attachments_block}" if attachments_block else "")
-        + (f"\n\n{memory}" if memory else "")
-    )
-    with traced_workflow(
-        "Treatment Plan: Multi-Specialty Coordination",
-        metadata={
-            "stage": "6-plan",
-            "assessment_count": len(req.assessments),
-            "symptoms": _truncate(req.symptoms),
-        },
-    ):
-        plan_text = await run_agent(plan_agent, prompt, model=model_slug)
-    return {"plan": plan_text}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Stage 7 — Patient Message
-# ─────────────────────────────────────────────────────────────────────────────
-
-@app.post("/api/message")
-async def patient_message(
-    req: MessageIn,
-    response: Response,
-    user: Optional[AuthUser] = Depends(current_user_maybe_required),
-):
-    model_slug = _resolve_for_request(req, user, response)
-    prompt = (
-        f"Primary diagnosis: {req.consensus.get('primaryDiagnosis')} "
-        f"(confidence {req.consensus.get('confidence')}%, {req.consensus.get('urgency')} urgency)\n"
-        f"ICD code: {req.consensus.get('icdCode', '')}\n"
-        f"Prognosis: {req.consensus.get('prognosis')}\n"
-        f"Key findings: {req.consensus.get('keyFindings')}\n\n"
-        f"Treatment plan:\n{req.plan}\n\n"
-        f"Original patient symptoms: {req.symptoms}"
-    )
-    # When the message guardrail trips on the disclaimer check, give the model
-    # one more shot with an explicit corrective hint instead of hard-failing.
-    # Disclaimer drift is the single most common message-stage trip and a
-    # second pass with the failure quoted back almost always succeeds. Other
-    # subcodes (e.g. message_introduces_unknown_diagnosis) are harder to
-    # self-correct, so they bubble straight to the global 422 handler.
-    #
-    # Note: the retry attempt CAN trip a different guardrail (e.g. the
-    # diagnosis-hallucination check under MESSAGE_HALLUCINATION_CHECK=1) — in
-    # that case the second-attempt 422 carries the new subcode, not
-    # "disclaimer_missing". Surfaced that way intentionally so callers see the
-    # actual failure mode.
-    _DISCLAIMER_RETRY_HINT = (
-        "\n\n---\n"
-        "CRITICAL CORRECTION REQUIRED — your previous response was rejected by "
-        "the output guardrail. The closing sentences MUST contain ALL of:\n"
-        "  (1) a reference to this being an AI advisory system (or AI guidance),\n"
-        "  (2) the words 'physician' / 'doctor' / 'clinician' / 'healthcare provider',\n"
-        "  (3) one of:\n"
-        "      • a verb like 'consult', 'see', 'seek', 'speak', 'talk to', 'discuss', or 'follow up' with a clinician, OR\n"
-        "      • a phrase noting the AI is 'not a substitute / replacement / alternative' for clinical care.\n"
-        "Re-write the entire patient message so the FINAL sentence(s) clearly "
-        "satisfy all three. Do not add any prefatory note; produce the corrected "
-        "message directly."
-    )
-
-    retried = False
-    retry_reason: str | None = None
-    with traced_workflow(
-        "Patient Communication: Empathetic Summary",
-        metadata={
-            "stage": "7-message",
-            "diagnosis": _truncate(str(req.consensus.get("primaryDiagnosis", ""))),
-            "urgency": req.consensus.get("urgency", "unknown"),
-            "symptoms": _truncate(req.symptoms),
-        },
-    ):
-        try:
-            message = await run_agent(
-                message_agent,
-                prompt,
-                model=model_slug,
-                context={"consensus": req.consensus},
-            )
-        except OutputGuardrailTripwireTriggered as exc:
-            info = exc.guardrail_result.output.output_info
-            subcode = info.get("code") if isinstance(info, dict) else None
-            if subcode != "message_disclaimer_missing":
-                raise
-            log.info(
-                "Message disclaimer missing on first attempt; retrying with corrective hint"
-            )
-            retried = True
-            retry_reason = subcode
-            message = await run_agent(
-                message_agent,
-                prompt + _DISCLAIMER_RETRY_HINT,
-                model=model_slug,
-                context={"consensus": req.consensus},
-            )
-
-    return {
-        "message": message,
-        "retried": retried,
-        "retry_reason": retry_reason,
-    }
-
-
-@app.post("/api/message/followup")
-async def patient_message_followup(
-    req: PatientFollowUpIn,
-    response: Response,
-    user: Optional[AuthUser] = Depends(current_user_maybe_required),
-):
-    """Answer patient questions after the final message; optional prior diagnostics for context."""
-    model_slug = _resolve_for_request(req, user, response)
-    prior = ""
-    if req.prior_diagnostics.strip():
-        prior = f"\n\nPrior diagnostics / records the patient cites:\n{req.prior_diagnostics.strip()}"
-
-    prompt = (
-        f"Patient symptoms (original): {req.symptoms}\n\n"
-        f"Intake follow-up answers: {req.followup_answers}\n\n"
-        f"Structured consensus (JSON):\n{json.dumps(req.consensus, ensure_ascii=False)}\n\n"
-        f"Treatment plan:\n{req.plan}\n\n"
-        f"Patient-facing message already sent:\n{req.patient_message}{prior}\n\n"
-        f"---\nPatient's new question:\n{req.question}"
-    )
-    with traced_workflow(
-        "Patient Follow-up Q&A",
-        metadata={
-            "stage": "7b-followup-qa",
-            "question": _truncate(req.question),
-            "has_prior_diagnostics": bool(req.prior_diagnostics.strip()),
-            "symptoms": _truncate(req.symptoms),
-        },
-    ):
-        reply = await run_agent(followup_qa_agent, prompt, model=model_slug)
-    return {"reply": reply}
+# Stage 7 — /api/message and /api/message/followup live in routers/message.py.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1326,52 +823,8 @@ async def delete_consultation(
         con.close()
 
 
-def _retrieve_patient_context(user_id: str, query: str, top_k: int = 3) -> str:
-    """Return a plain-text block of similar prior consultations for injection into agent prompts.
-
-    Returns "" when the user has no prior consultations or embedding fails —
-    callers can unconditionally concatenate the result.
-    """
-    if not user_id or not (query or "").strip():
-        return ""
-    from embeddings import get_embedding_provider
-    from vector_store import get_vector_store
-
-    con = _get_db()
-    try:
-        try:
-            vec = get_embedding_provider().embed(query)
-            hits = get_vector_store().query(
-                con,
-                embedding=vec,
-                top_k=top_k,
-                where={"user_id": user_id},
-            )
-        except Exception as exc:
-            log.warning("patient context retrieval failed: %s", exc)
-            return ""
-
-        if not hits:
-            return ""
-
-        lines = ["--- Patient's prior consultations (most relevant first) ---"]
-        for h in hits:
-            meta = h.metadata or {}
-            date = str(meta.get("created_at") or "")[:10]
-            dx = meta.get("primary_dx") or "—"
-            urgency = meta.get("urgency") or ""
-            conf = meta.get("confidence") or 0
-            score_pct = int(round(h.score * 100))
-            document = (h.document or "").strip()
-            if len(document) > MAX_RETRIEVED_CONSULTATION_CHARS:
-                document = document[:MAX_RETRIEVED_CONSULTATION_CHARS].rstrip() + "\n[truncated]"
-            lines.append(
-                f"[{date} · {dx} (confidence {conf}%, {urgency}) · match {score_pct}%]\n{document}"
-            )
-        lines.append("---")
-        return "\n\n".join(lines)
-    finally:
-        con.close()
+# _retrieve_patient_context moved to case_context.py; aliased below.
+from case_context import retrieve_patient_context as _retrieve_patient_context  # noqa: E402
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1379,42 +832,8 @@ def _retrieve_patient_context(user_id: str, query: str, top_k: int = 3) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-def _attachment_block_for_case(
-    case_id: str,
-    user_id: str,
-    question_texts: list[str] | None = None,
-) -> str:
-    """Read attachments for a case and render as a prompt-safe text block.
-
-    Ownership is enforced at write time by `create_attachment` (the case is
-    verified to belong to the requesting user before save). The per-row
-    user_id filter below is the single read-time check — sufficient because
-    a row exists with `user_id != requesting_user` only if either save's
-    ownership check was skipped or somebody wrote rows out-of-band, both of
-    which fall back to "filter rejects all rows → empty block".
-
-    Previously this function also ran a `SELECT id FROM cases WHERE id=%s
-    AND user_id=%s` upfront. Dropped — that query duplicated the per-row
-    filter, added a round-trip per agent stage, and was the dominant cost
-    on Cloud Run cold starts (~5–10ms × stages).
-    """
-    from attachments import format_attachment_block, get_attachment_store
-
-    if not user_id:
-        return ""
-
-    con = _get_db()
-    try:
-        rows = [
-            row
-            for row in get_attachment_store().list_for_case(con, case_id)
-            if row.user_id == user_id
-        ]
-    except NotImplementedError:
-        return ""
-    finally:
-        con.close()
-    return format_attachment_block(rows, question_texts)
+# _attachment_block_for_case moved to case_context.py; aliased below.
+from case_context import attachment_block_for_case as _attachment_block_for_case  # noqa: E402
 
 
 @app.post("/api/cases/{case_id}/attachments")

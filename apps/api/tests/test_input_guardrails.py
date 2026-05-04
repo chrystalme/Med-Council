@@ -210,8 +210,11 @@ class IntakeRouteIntegrationTest(unittest.TestCase):
         # Bypass Clerk auth in tests (the dev .env may set CLERK_ISSUER, which
         # would otherwise 401 the request before the guardrail path runs).
         _main.app.dependency_overrides[current_user_maybe_required] = lambda: None
+        # /api/intake/followup lives in routers/intake.py post-Refactor 4 —
+        # patch run_agent on that namespace.
+        from routers import intake as _intake_router
         try:
-            with patch.object(_main, "run_agent", side_effect=_raise_tripwire):
+            with patch.object(_intake_router, "run_agent", side_effect=_raise_tripwire):
                 client = TestClient(_main.app)
                 resp = client.post(
                     "/api/intake/followup",

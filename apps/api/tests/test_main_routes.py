@@ -291,12 +291,12 @@ class IntakeFollowupRouteTest(unittest.TestCase):
         self.client = _client()
 
     def _patch_run_agent(self, return_value: str):
-        import main as _main
+        from routers import intake as _intake_router
 
         async def _fake(*args, **kwargs):
             return return_value
 
-        return patch.object(_main, "run_agent", side_effect=_fake)
+        return patch.object(_intake_router, "run_agent", side_effect=_fake)
 
     def test_returns_numbered_questions(self) -> None:
         with self._patch_run_agent(
@@ -315,12 +315,12 @@ class TriageRouteTest(unittest.TestCase):
         self.client = _client()
 
     def _patch_run_agent(self, return_value: str):
-        import main as _main
+        from routers import triage as _triage_router
 
         async def _fake(*args, **kwargs):
             return return_value
 
-        return patch.object(_main, "run_agent", side_effect=_fake)
+        return patch.object(_triage_router, "run_agent", side_effect=_fake)
 
     def test_returns_specialist_selection_with_internal_medicine_default(self) -> None:
         with self._patch_run_agent(
@@ -350,12 +350,12 @@ class ConsensusRouteTest(unittest.TestCase):
         self.client = _client()
 
     def _patch_run_agent(self, return_value: str):
-        import main as _main
+        from routers import consensus_plan as _cp_router
 
         async def _fake(*args, **kwargs):
             return return_value
 
-        return patch.object(_main, "run_agent", side_effect=_fake)
+        return patch.object(_cp_router, "run_agent", side_effect=_fake)
 
     def test_returns_consensus_payload(self) -> None:
         consensus_json = (
@@ -385,12 +385,12 @@ class PlanRouteTest(unittest.TestCase):
         self.client = _client()
 
     def _patch_run_agent(self, return_value: str):
-        import main as _main
+        from routers import consensus_plan as _cp_router
 
         async def _fake(*args, **kwargs):
             return return_value
 
-        return patch.object(_main, "run_agent", side_effect=_fake)
+        return patch.object(_cp_router, "run_agent", side_effect=_fake)
 
     def test_returns_plan_text(self) -> None:
         plan_md = (
@@ -422,7 +422,7 @@ class MessageRouteTest(unittest.TestCase):
         self.client = _client()
 
     def test_returns_message_text(self) -> None:
-        import main as _main
+        from routers import message as _message_router
 
         message_text = (
             "Take care of yourself today and rest. Remember, this AI summary is not a "
@@ -432,7 +432,7 @@ class MessageRouteTest(unittest.TestCase):
         async def _fake(*args, **kwargs):
             return message_text
 
-        with patch.object(_main, "run_agent", side_effect=_fake):
+        with patch.object(_message_router, "run_agent", side_effect=_fake):
             r = self.client.post(
                 "/api/message",
                 json={
@@ -455,12 +455,12 @@ class CouncilSpecialistRouteTest(unittest.TestCase):
         self.client = _client()
 
     def _patch_run_agent(self, return_value: str):
-        import main as _main
+        from routers import council as _council_router
 
         async def _fake(*args, **kwargs):
             return return_value
 
-        return patch.object(_main, "run_agent", side_effect=_fake)
+        return patch.object(_council_router, "run_agent", side_effect=_fake)
 
     def test_returns_specialist_assessment(self) -> None:
         with self._patch_run_agent("Cardiology assessment: ACS likely."):
@@ -496,12 +496,12 @@ class CouncilPhysicianRouteTest(unittest.TestCase):
         self.client = _client()
 
     def test_returns_physician_assessment(self) -> None:
-        import main as _main
+        from routers import council as _council_router
 
         async def _fake(*args, **kwargs):
             return "Internal medicine: rule out ACS."
 
-        with patch.object(_main, "run_agent", side_effect=_fake):
+        with patch.object(_council_router, "run_agent", side_effect=_fake):
             r = self.client.post(
                 "/api/council/physician",
                 json={
@@ -523,7 +523,7 @@ class ResearchRouteTest(unittest.TestCase):
         self.client = _client()
 
     def test_returns_papers_payload(self) -> None:
-        import main as _main
+        from routers import research as _research_router
 
         papers_json = (
             '{"papers": [{"title": "Acute coronary syndromes", "authors": "Smith J", '
@@ -535,7 +535,7 @@ class ResearchRouteTest(unittest.TestCase):
         async def _fake(*args, **kwargs):
             return papers_json
 
-        with patch.object(_main, "run_agent", side_effect=_fake):
+        with patch.object(_research_router, "run_agent", side_effect=_fake):
             r = self.client.post(
                 "/api/research",
                 json={
@@ -557,7 +557,7 @@ class DeliberationSelectExpertsRouteTest(unittest.TestCase):
         self.client = _client()
 
     def test_returns_experts_with_internal_medicine_default(self) -> None:
-        import main as _main
+        from routers import triage as _triage_router
 
         async def _fake(*args, **kwargs):
             return (
@@ -566,7 +566,7 @@ class DeliberationSelectExpertsRouteTest(unittest.TestCase):
                 '"focus_areas": ["chest pain"]}'
             )
 
-        with patch.object(_main, "run_agent", side_effect=_fake):
+        with patch.object(_triage_router, "run_agent", side_effect=_fake):
             r = self.client.post(
                 "/api/deliberation/select-experts",
                 json={"symptoms": "chest pain", "followup_answers": "x"},
@@ -742,12 +742,12 @@ class MessageFollowupRouteTest(unittest.TestCase):
         self.client = _client()
 
     def test_returns_followup_text(self) -> None:
-        import main as _main
+        from routers import message as _message_router
 
         async def _fake(*args, **kwargs):
             return "Yes, that's a reasonable interpretation. Discuss with your physician — this AI guidance is informational only."
 
-        with patch.object(_main, "run_agent", side_effect=_fake):
+        with patch.object(_message_router, "run_agent", side_effect=_fake):
             r = self.client.post(
                 "/api/message/followup",
                 json={
@@ -979,7 +979,10 @@ class ExceptionHandlersTest(unittest.TestCase):
         async def _boom(*args, **kwargs):
             raise RuntimeError("simulated provider crash")
 
-        with patch.object(_main, "run_agent", side_effect=_boom):
+        # /api/intake/followup now lives in routers/intake.py — patch run_agent there.
+        from routers import intake as _intake_router
+
+        with patch.object(_intake_router, "run_agent", side_effect=_boom):
             r = client.post(
                 "/api/intake/followup",
                 json={"symptoms": "test"},
