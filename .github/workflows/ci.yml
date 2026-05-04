@@ -17,6 +17,24 @@ permissions:
   contents: read
 
 jobs:
+  terraform-shared-config-guard:
+    name: Terraform shared-config guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # `var.secret_names` and `var.ar_repo` are shared between the dev and
+      # prod workspaces — see terraform/imports.tf. If either is overridden in
+      # a per-workspace tfvars file, the next apply on the workspace that
+      # plans last drifts the other workspace's state. Block that at the PR.
+      - name: Reject per-workspace overrides of shared variables
+        run: |
+          set -e
+          if grep -E '^\s*(secret_names|ar_repo)\s*=' terraform/env/*.tfvars; then
+            echo "::error::secret_names / ar_repo must live in variables.tf only — see imports.tf header."
+            exit 1
+          fi
+
   web:
     name: Web (Next.js)
     runs-on: ubuntu-latest
