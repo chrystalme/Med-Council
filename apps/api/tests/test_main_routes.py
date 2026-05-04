@@ -315,12 +315,12 @@ class TriageRouteTest(unittest.TestCase):
         self.client = _client()
 
     def _patch_run_agent(self, return_value: str):
-        import main as _main
+        from routers import triage as _triage_router
 
         async def _fake(*args, **kwargs):
             return return_value
 
-        return patch.object(_main, "run_agent", side_effect=_fake)
+        return patch.object(_triage_router, "run_agent", side_effect=_fake)
 
     def test_returns_specialist_selection_with_internal_medicine_default(self) -> None:
         with self._patch_run_agent(
@@ -557,7 +557,7 @@ class DeliberationSelectExpertsRouteTest(unittest.TestCase):
         self.client = _client()
 
     def test_returns_experts_with_internal_medicine_default(self) -> None:
-        import main as _main
+        from routers import triage as _triage_router
 
         async def _fake(*args, **kwargs):
             return (
@@ -566,7 +566,7 @@ class DeliberationSelectExpertsRouteTest(unittest.TestCase):
                 '"focus_areas": ["chest pain"]}'
             )
 
-        with patch.object(_main, "run_agent", side_effect=_fake):
+        with patch.object(_triage_router, "run_agent", side_effect=_fake):
             r = self.client.post(
                 "/api/deliberation/select-experts",
                 json={"symptoms": "chest pain", "followup_answers": "x"},
