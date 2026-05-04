@@ -1705,7 +1705,20 @@ def _attachment_block_for_case(
     user_id: str,
     question_texts: list[str] | None = None,
 ) -> str:
-    """Read attachments for a case and render as a prompt-safe text block."""
+    """Read attachments for a case and render as a prompt-safe text block.
+
+    Ownership is enforced at write time by `create_attachment` (the case is
+    verified to belong to the requesting user before save). The per-row
+    user_id filter below is the single read-time check — sufficient because
+    a row exists with `user_id != requesting_user` only if either save's
+    ownership check was skipped or somebody wrote rows out-of-band, both of
+    which fall back to "filter rejects all rows → empty block".
+
+    Previously this function also ran a `SELECT id FROM cases WHERE id=%s
+    AND user_id=%s` upfront. Dropped — that query duplicated the per-row
+    filter, added a round-trip per agent stage, and was the dominant cost
+    on Cloud Run cold starts (~5–10ms × stages).
+    """
     from attachments import format_attachment_block, get_attachment_store
 
     if not user_id:
@@ -1713,12 +1726,6 @@ def _attachment_block_for_case(
 
     con = _get_db()
     try:
-        case_row = con.execute(
-            "SELECT id FROM cases WHERE id = %s AND user_id = %s",
-            (case_id, user_id),
-        ).fetchone()
-        if case_row is None:
-            return ""
         rows = [
             row
             for row in get_attachment_store().list_for_case(con, case_id)
