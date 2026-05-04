@@ -523,7 +523,7 @@ class ResearchRouteTest(unittest.TestCase):
         self.client = _client()
 
     def test_returns_papers_payload(self) -> None:
-        import main as _main
+        from routers import research as _research_router
 
         papers_json = (
             '{"papers": [{"title": "Acute coronary syndromes", "authors": "Smith J", '
@@ -535,7 +535,7 @@ class ResearchRouteTest(unittest.TestCase):
         async def _fake(*args, **kwargs):
             return papers_json
 
-        with patch.object(_main, "run_agent", side_effect=_fake):
+        with patch.object(_research_router, "run_agent", side_effect=_fake):
             r = self.client.post(
                 "/api/research",
                 json={

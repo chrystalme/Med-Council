@@ -282,6 +282,7 @@ from routers import council as _council_router  # noqa: E402
 from routers import feedback as _feedback_router  # noqa: E402
 from routers import intake as _intake_router  # noqa: E402
 from routers import meta as _meta_router  # noqa: E402
+from routers import research as _research_router  # noqa: E402
 from routers import triage as _triage_router  # noqa: E402
 
 app.include_router(_meta_router.router)
@@ -290,6 +291,7 @@ app.include_router(_cases_router.router)
 app.include_router(_intake_router.router)
 app.include_router(_triage_router.router)
 app.include_router(_council_router.router)
+app.include_router(_research_router.router)
 
 
 @app.exception_handler(OutputGuardrailTripwireTriggered)
@@ -444,57 +446,7 @@ from helpers import (  # noqa: E402
 #  Stage 4 — Research
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.post("/api/research")
-async def research(
-    req: ResearchIn,
-    response: Response,
-    user: Optional[AuthUser] = Depends(current_user_maybe_required),
-):
-    model_slug = _resolve_for_request(req, user, response)
-    assessments_text = "\n\n".join(
-        f"{a['name']} ({a['specialty']}):\n{a['assessment']}" for a in req.assessments
-    )
-    prompt = (
-        f"Patient symptoms: {req.symptoms}\n\n"
-        f"Follow-up responses: {req.followup_answers}\n\n"
-        f"Team assessments:\n{assessments_text}"
-    )
-    with traced_workflow(
-        "Research: Evidence-Based Paper Selection",
-        metadata={
-            "stage": "4-research",
-            "assessment_count": len(req.assessments),
-            "symptoms": _truncate(req.symptoms),
-        },
-    ):
-        raw = await run_agent(research_agent, prompt, model=model_slug)
-
-    with custom_span("parse_research_papers", data={"source": "model_output"}):
-        papers, parse_warning = parse_research_papers(raw)
-
-    # Failsafe: if the model didn't return a usable papers array (or produced narrative-only output),
-    # fetch real PubMed links based on the case text so the UI always has actionable references.
-    has_any_links = any(bool((p or {}).get("url")) for p in (papers or []))
-    if not has_any_links:
-        try:
-            with custom_span("pubmed_fallback_search", data={"reason": "no_urls_in_model_output"}):
-                pubmed_term = f"{req.symptoms}\n{req.followup_answers}\n{assessments_text}"
-                pubmed_papers = _pubmed_search_papers(pubmed_term, retmax=4)
-            if pubmed_papers:
-                papers = pubmed_papers
-                parse_warning = (
-                    (parse_warning + " " if parse_warning else "")
-                    + "Recovered PubMed links via direct search fallback."
-                )
-        except Exception as exc:
-            # NCBI rate-limits + network timeouts shouldn't fail the whole research stage.
-            log.warning("pubmed fallback search failed: %s", exc)
-            parse_warning = (
-                (parse_warning + " " if parse_warning else "")
-                + "PubMed fallback unavailable."
-            )
-
-    return {"papers": papers, "parse_warning": parse_warning}
+# Stage 4 — /api/research lives in routers/research.py.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
