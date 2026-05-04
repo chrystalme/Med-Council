@@ -163,10 +163,12 @@ class CasesCrudTest(unittest.TestCase):
     def setUp(self) -> None:
         self.client = _client()
         self.con = _FakeCon()
-        # Patch _get_db to return our fake connection on every call.
-        import main as _main
+        # Cases routes now live in routers/cases.py and call db.connect()
+        # directly via a `_db` alias. Patch that alias's connect attr so the
+        # whole module's DB usage hits our fake.
+        from routers import cases as _cases_router
 
-        self._patcher = patch.object(_main, "_get_db", return_value=self.con)
+        self._patcher = patch.object(_cases_router._db, "connect", return_value=self.con)
         self._patcher.start()
         self.addCleanup(self._patcher.stop)
 
@@ -585,9 +587,9 @@ class CasePatchRouteTest(unittest.TestCase):
     def setUp(self) -> None:
         self.client = _client()
         self.con = _FakeCon()
-        import main as _main
+        from routers import cases as _cases_router
 
-        self._patcher = patch.object(_main, "_get_db", return_value=self.con)
+        self._patcher = patch.object(_cases_router._db, "connect", return_value=self.con)
         self._patcher.start()
         self.addCleanup(self._patcher.stop)
 

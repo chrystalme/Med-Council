@@ -131,16 +131,7 @@ def _get_db():
     return _db.connect()
 
 
-def _json_object(raw: Any) -> dict[str, Any]:
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, str):
-        try:
-            parsed = json.loads(raw or "{}")
-        except json.JSONDecodeError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
+# _json_object lives in helpers.py; aliased below for the routes still here.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -286,11 +277,13 @@ app.add_middleware(
 
 
 # ── Routers (extracted from main.py) ────────────────────────────────────────
+from routers import cases as _cases_router  # noqa: E402
 from routers import feedback as _feedback_router  # noqa: E402
 from routers import meta as _meta_router  # noqa: E402
 
 app.include_router(_meta_router.router)
 app.include_router(_feedback_router.router)
+app.include_router(_cases_router.router)
 
 
 @app.exception_handler(OutputGuardrailTripwireTriggered)
@@ -403,119 +396,17 @@ from schemas import (
 # in routers/meta.py and are registered below the FastAPI() construction.
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Feedback
-# ─────────────────────────────────────────────────────────────────────────────
+# Cases CRUD (/api/cases*) lives in routers/cases.py.
+# /api/feedback and /feedback/{token} live in routers/feedback.py.
+# _cases_user_id, _utc_now, _json_object are now in helpers.py — main.py
+# re-aliases them below for the routes still here (consultations, attachments,
+# etc.). Drop the aliases when those routes move.
 
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _cases_user_id(user: Optional[AuthUser]) -> str:
-    return user.user_id if user else ""
-
-
-class CaseCreateIn(BaseModel):
-    title: str = Field(default="", max_length=500)
-
-
-class CasePatchIn(BaseModel):
-    state: dict[str, Any]
-    title: str | None = Field(default=None, max_length=500)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Case persistence (Step 3)
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-@app.post("/api/cases")
-async def cases_create(req: CaseCreateIn, user: Optional[AuthUser] = Depends(current_user_maybe_required)):
-    cid = str(uuid.uuid4())
-    uid = _cases_user_id(user)
-    now = _utc_now()
-    con = _get_db()
-    con.execute(
-        "INSERT INTO cases (id, user_id, title, state, created_at, updated_at) VALUES (%s,%s,%s,%s,%s,%s)",
-        (cid, uid, req.title or "Untitled case", "{}", now, now),
-    )
-    con.commit()
-    con.close()
-    return {"id": cid, "title": req.title or "Untitled case", "created_at": now}
-
-
-@app.get("/api/cases")
-def cases_list(user: Optional[AuthUser] = Depends(current_user_maybe_required)):
-    uid = _cases_user_id(user)
-    con = _get_db()
-    rows = con.execute(
-        "SELECT id, title, updated_at FROM cases WHERE user_id = %s ORDER BY updated_at DESC LIMIT 50",
-        (uid,),
-    ).fetchall()
-    con.close()
-    return {"cases": [{"id": r["id"], "title": r["title"], "updated_at": r["updated_at"]} for r in rows]}
-
-
-@app.get("/api/cases/{case_id}")
-def cases_get(case_id: str, user: Optional[AuthUser] = Depends(current_user_maybe_required)):
-    uid = _cases_user_id(user)
-    con = _get_db()
-    row = con.execute(
-        "SELECT id, user_id, title, state, created_at, updated_at FROM cases WHERE id = %s",
-        (case_id,),
-    ).fetchone()
-    con.close()
-    if not row or row["user_id"] != uid:
-        raise HTTPException(status_code=404, detail="Case not found")
-    # JSONB returns a dict via psycopg; string fallback handles legacy sqlite rows.
-    raw_state = row["state"]
-    if isinstance(raw_state, str):
-        try:
-            state = json.loads(raw_state or "{}")
-        except json.JSONDecodeError:
-            state = {}
-    else:
-        state = raw_state or {}
-    return {
-        "id": row["id"],
-        "title": row["title"],
-        "state": state,
-        "created_at": row["created_at"],
-        "updated_at": row["updated_at"],
-    }
-
-
-@app.patch("/api/cases/{case_id}")
-async def cases_patch(
-    case_id: str,
-    req: CasePatchIn,
-    user: Optional[AuthUser] = Depends(current_user_maybe_required),
-):
-    uid = _cases_user_id(user)
-    con = _get_db()
-    row = con.execute("SELECT user_id FROM cases WHERE id = %s", (case_id,)).fetchone()
-    if not row or row["user_id"] != uid:
-        con.close()
-        raise HTTPException(status_code=404, detail="Case not found")
-    now = _utc_now()
-    state_json = json.dumps(req.state, ensure_ascii=False)
-    if req.title is not None:
-        con.execute(
-            "UPDATE cases SET state = %s, title = %s, updated_at = %s WHERE id = %s",
-            (state_json, req.title[:500], now, case_id),
-        )
-    else:
-        con.execute(
-            "UPDATE cases SET state = %s, updated_at = %s WHERE id = %s",
-            (state_json, now, case_id),
-        )
-    con.commit()
-    con.close()
-    return {"id": case_id, "updated_at": now}
-
-
-# /api/feedback and /feedback/{token} are registered via routers/feedback.py.
-# FeedbackIn moved with the route. FEEDBACK_SECRET also lives there.
+from helpers import (  # noqa: E402
+    cases_user_id as _cases_user_id,
+    json_object as _json_object,
+    utc_now as _utc_now,
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
