@@ -350,12 +350,12 @@ class ConsensusRouteTest(unittest.TestCase):
         self.client = _client()
 
     def _patch_run_agent(self, return_value: str):
-        import main as _main
+        from routers import consensus_plan as _cp_router
 
         async def _fake(*args, **kwargs):
             return return_value
 
-        return patch.object(_main, "run_agent", side_effect=_fake)
+        return patch.object(_cp_router, "run_agent", side_effect=_fake)
 
     def test_returns_consensus_payload(self) -> None:
         consensus_json = (
@@ -385,12 +385,12 @@ class PlanRouteTest(unittest.TestCase):
         self.client = _client()
 
     def _patch_run_agent(self, return_value: str):
-        import main as _main
+        from routers import consensus_plan as _cp_router
 
         async def _fake(*args, **kwargs):
             return return_value
 
-        return patch.object(_main, "run_agent", side_effect=_fake)
+        return patch.object(_cp_router, "run_agent", side_effect=_fake)
 
     def test_returns_plan_text(self) -> None:
         plan_md = (

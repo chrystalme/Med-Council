@@ -278,6 +278,7 @@ app.add_middleware(
 
 # ── Routers (extracted from main.py) ────────────────────────────────────────
 from routers import cases as _cases_router  # noqa: E402
+from routers import consensus_plan as _consensus_plan_router  # noqa: E402
 from routers import council as _council_router  # noqa: E402
 from routers import feedback as _feedback_router  # noqa: E402
 from routers import intake as _intake_router  # noqa: E402
@@ -292,6 +293,7 @@ app.include_router(_intake_router.router)
 app.include_router(_triage_router.router)
 app.include_router(_council_router.router)
 app.include_router(_research_router.router)
+app.include_router(_consensus_plan_router.router)
 
 
 @app.exception_handler(OutputGuardrailTripwireTriggered)
@@ -449,96 +451,7 @@ from helpers import (  # noqa: E402
 # Stage 4 — /api/research lives in routers/research.py.
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Stage 5 — Consensus / Diagnosis
-# ─────────────────────────────────────────────────────────────────────────────
-
-@app.post("/api/consensus")
-async def consensus(
-    req: ConsensusIn,
-    response: Response,
-    user: Optional[AuthUser] = Depends(current_user_maybe_required),
-):
-    model_slug = _resolve_for_request(req, user, response)
-    assessments_text = "\n\n".join(
-        f"{a['name']} ({a['specialty']}):\n{a['assessment']}" for a in req.assessments
-    )
-    research_text = "\n".join(
-        f"• {r.get('title','')} ({r.get('year','')}): {r.get('summary','')}"
-        for r in req.research
-    )
-    memory = _retrieve_patient_context(_cases_user_id(user), req.symptoms)
-    attachments_block = _attachment_block_for_case(req.case_id, _cases_user_id(user)) if req.case_id else ""
-    prompt = (
-        f"Patient symptoms: {req.symptoms}\n\n"
-        f"Follow-up responses: {req.followup_answers}\n\n"
-        f"Specialist assessments:\n{assessments_text}\n\n"
-        f"Supporting research:\n{research_text}"
-        + (f"\n\n{attachments_block}" if attachments_block else "")
-        + (f"\n\n{memory}" if memory else "")
-    )
-    with traced_workflow(
-        "Consensus: Integrating Multidisciplinary Assessment",
-        metadata={
-            "stage": "5-consensus",
-            "assessment_count": len(req.assessments),
-            "research_paper_count": len(req.research),
-            "symptoms": _truncate(req.symptoms),
-        },
-    ):
-        raw = await run_agent(consensus_agent, prompt, model=model_slug)
-
-    try:
-        data = parse_json(raw)
-    except ValueError as e:
-        raise HTTPException(status_code=502, detail=str(e)) from e
-
-    if isinstance(data, dict):
-        asyncio.create_task(
-            asyncio.to_thread(
-                maybe_escalate_oncall,
-                consensus=data,
-                symptoms=req.symptoms,
-            )
-        )
-
-    return {"consensus": data}
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Stage 6 — Treatment Plan
-# ─────────────────────────────────────────────────────────────────────────────
-
-@app.post("/api/plan")
-async def plan(
-    req: PlanIn,
-    response: Response,
-    user: Optional[AuthUser] = Depends(current_user_maybe_required),
-):
-    model_slug = _resolve_for_request(req, user, response)
-    assessments_text = "\n\n".join(
-        f"{a['name']} ({a['specialty']}):\n{a['assessment']}" for a in req.assessments
-    )
-    memory = _retrieve_patient_context(_cases_user_id(user), req.symptoms)
-    attachments_block = _attachment_block_for_case(req.case_id, _cases_user_id(user)) if req.case_id else ""
-    prompt = (
-        f"Diagnosis: {json.dumps(req.consensus)}\n\n"
-        f"Patient symptoms: {req.symptoms}\n\n"
-        f"Follow-up responses: {req.followup_answers}\n\n"
-        f"Specialist findings:\n{assessments_text}"
-        + (f"\n\n{attachments_block}" if attachments_block else "")
-        + (f"\n\n{memory}" if memory else "")
-    )
-    with traced_workflow(
-        "Treatment Plan: Multi-Specialty Coordination",
-        metadata={
-            "stage": "6-plan",
-            "assessment_count": len(req.assessments),
-            "symptoms": _truncate(req.symptoms),
-        },
-    ):
-        plan_text = await run_agent(plan_agent, prompt, model=model_slug)
-    return {"plan": plan_text}
+# Stages 5 + 6 — /api/consensus and /api/plan live in routers/consensus_plan.py.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
