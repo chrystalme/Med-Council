@@ -291,12 +291,12 @@ class IntakeFollowupRouteTest(unittest.TestCase):
         self.client = _client()
 
     def _patch_run_agent(self, return_value: str):
-        import main as _main
+        from routers import intake as _intake_router
 
         async def _fake(*args, **kwargs):
             return return_value
 
-        return patch.object(_main, "run_agent", side_effect=_fake)
+        return patch.object(_intake_router, "run_agent", side_effect=_fake)
 
     def test_returns_numbered_questions(self) -> None:
         with self._patch_run_agent(
@@ -979,7 +979,10 @@ class ExceptionHandlersTest(unittest.TestCase):
         async def _boom(*args, **kwargs):
             raise RuntimeError("simulated provider crash")
 
-        with patch.object(_main, "run_agent", side_effect=_boom):
+        # /api/intake/followup now lives in routers/intake.py — patch run_agent there.
+        from routers import intake as _intake_router
+
+        with patch.object(_intake_router, "run_agent", side_effect=_boom):
             r = client.post(
                 "/api/intake/followup",
                 json={"symptoms": "test"},

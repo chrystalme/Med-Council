@@ -279,11 +279,13 @@ app.add_middleware(
 # ── Routers (extracted from main.py) ────────────────────────────────────────
 from routers import cases as _cases_router  # noqa: E402
 from routers import feedback as _feedback_router  # noqa: E402
+from routers import intake as _intake_router  # noqa: E402
 from routers import meta as _meta_router  # noqa: E402
 
 app.include_router(_meta_router.router)
 app.include_router(_feedback_router.router)
 app.include_router(_cases_router.router)
+app.include_router(_intake_router.router)
 
 
 @app.exception_handler(OutputGuardrailTripwireTriggered)
@@ -420,40 +422,7 @@ from helpers import (  # noqa: E402
 #  Stage 1 — Intake
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.post("/api/intake/followup")
-async def intake_followup(
-    req: SymptomsIn,
-    response: Response,
-    user: Optional[AuthUser] = Depends(current_user_maybe_required),
-):
-    model_slug = _resolve_for_request(req, user, response)
-    try:
-        with traced_workflow(
-            "Intake Follow-up Questions",
-            metadata={"stage": "1-intake", "symptoms": _truncate(req.symptoms)},
-        ):
-            raw_text = await run_agent(
-                intake_agent,
-                f"Patient self-reports: {req.symptoms}",
-                model=model_slug,
-            )
-    except InputGuardrailTripwireTriggered as e:
-        info = e.guardrail_result.output.output_info if e.guardrail_result.output else {}
-        raise HTTPException(
-            status_code=422,
-            detail={
-                "error": "non_medical_input",
-                "message": (
-                    "This service is designed for medical questions only. "
-                    "Please describe a health concern, symptom, or medical situation."
-                ),
-                "reasoning": info.get("reasoning", ""),
-            },
-        ) from e
-    try:
-        return {"questions": _format_intake_questions_for_api(raw_text)}
-    except ValueError as e:
-        raise HTTPException(status_code=502, detail=str(e)) from e
+# /api/intake/followup lives in routers/intake.py.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
