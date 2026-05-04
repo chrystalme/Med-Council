@@ -1188,13 +1188,21 @@ async def patient_message(
     # second pass with the failure quoted back almost always succeeds. Other
     # subcodes (e.g. message_introduces_unknown_diagnosis) are harder to
     # self-correct, so they bubble straight to the global 422 handler.
+    #
+    # Note: the retry attempt CAN trip a different guardrail (e.g. the
+    # diagnosis-hallucination check under MESSAGE_HALLUCINATION_CHECK=1) — in
+    # that case the second-attempt 422 carries the new subcode, not
+    # "disclaimer_missing". Surfaced that way intentionally so callers see the
+    # actual failure mode.
     _DISCLAIMER_RETRY_HINT = (
         "\n\n---\n"
         "CRITICAL CORRECTION REQUIRED — your previous response was rejected by "
         "the output guardrail. The closing sentences MUST contain ALL of:\n"
         "  (1) a reference to this being an AI advisory system (or AI guidance),\n"
         "  (2) the words 'physician' / 'doctor' / 'clinician' / 'healthcare provider',\n"
-        "  (3) a verb like 'consult', 'see', 'speak', or 'talk to'.\n"
+        "  (3) one of:\n"
+        "      • a verb like 'consult', 'see', 'seek', 'speak', 'talk to', 'discuss', or 'follow up' with a clinician, OR\n"
+        "      • a phrase noting the AI is 'not a substitute / replacement / alternative' for clinical care.\n"
         "Re-write the entire patient message so the FINAL sentence(s) clearly "
         "satisfy all three. Do not add any prefatory note; produce the corrected "
         "message directly."

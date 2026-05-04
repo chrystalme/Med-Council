@@ -302,6 +302,39 @@ class DisclaimerHelperTest(unittest.TestCase):
         )
         self.assertFalse(g._disclaimer_present(text))
 
+    # ── Wider verb / phrase coverage (#8) ─────────────────────────────────
+
+    def test_seek_verb_passes(self) -> None:
+        text = "Get plenty of rest. AI guidance is informational; please seek a clinician's review."
+        self.assertTrue(g._disclaimer_present(text))
+
+    def test_discuss_verb_passes(self) -> None:
+        text = "Stay hydrated. Remember this is AI-supported education — discuss any treatment changes with your doctor."
+        self.assertTrue(g._disclaimer_present(text))
+
+    def test_follow_up_verb_phrase_passes(self) -> None:
+        text = "Track symptoms over the next 48 hours. AI guidance is informational; follow up with your physician for evaluation."
+        self.assertTrue(g._disclaimer_present(text))
+
+    def test_substitute_phrasing_passes(self) -> None:
+        text = (
+            "Take steady breaths and rest. This AI summary is not a substitute for advice "
+            "from a licensed clinician."
+        )
+        self.assertTrue(g._disclaimer_present(text))
+
+    def test_replacement_phrasing_passes(self) -> None:
+        text = (
+            "Eat regularly and sleep well. This AI tool is no replacement for an in-person "
+            "visit with a physician."
+        )
+        self.assertTrue(g._disclaimer_present(text))
+
+    def test_only_two_signals_still_trips(self) -> None:
+        # AI + clinician but no verb / replacement phrase → still missing.
+        text = "Take it easy. AI guidance and a physician opinion are different things."
+        self.assertFalse(g._disclaimer_present(text))
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Toxicity guardrail (with monkeypatched classifier)
