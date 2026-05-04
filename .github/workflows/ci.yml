@@ -71,5 +71,18 @@ jobs:
 
       # All tests under apps/api/tests/ stub network calls (Langfuse, OpenAI,
       # Resend, urllib) — verified by audit. Failures here block the merge.
-      - name: Tests
-        run: uv run python -m unittest discover tests -v
+      # Coverage runs alongside; the gate ratchets up only — never lower
+      # the --fail-under floor, raise it as new modules get covered.
+      # Source / omit config lives in pyproject.toml [tool.coverage.*].
+      - name: Tests + coverage
+        run: |
+          uv run --with coverage python -m coverage run -m unittest discover tests -v
+          uv run --with coverage python -m coverage report --fail-under=39
+          uv run --with coverage python -m coverage xml -o coverage.xml
+
+      - name: Upload coverage artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-coverage
+          path: apps/api/coverage.xml
