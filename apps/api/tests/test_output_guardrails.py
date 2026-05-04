@@ -475,10 +475,13 @@ class MessageRetryOnDisclaimerTest(unittest.TestCase):
         from auth import current_user_maybe_required
 
         import main as _main
+        # /api/message lives in routers/message.py post-Refactor 4; patch
+        # run_agent on that namespace.
+        from routers import message as _message_router
 
         _main.app.dependency_overrides[current_user_maybe_required] = lambda: None
         try:
-            with patch.object(_main, "run_agent", side_effect=run_agent_side_effect):
+            with patch.object(_message_router, "run_agent", side_effect=run_agent_side_effect):
                 client = TestClient(_main.app)
                 return client.post(
                     "/api/message",

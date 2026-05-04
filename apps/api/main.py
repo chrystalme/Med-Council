@@ -282,6 +282,7 @@ from routers import consensus_plan as _consensus_plan_router  # noqa: E402
 from routers import council as _council_router  # noqa: E402
 from routers import feedback as _feedback_router  # noqa: E402
 from routers import intake as _intake_router  # noqa: E402
+from routers import message as _message_router  # noqa: E402
 from routers import meta as _meta_router  # noqa: E402
 from routers import research as _research_router  # noqa: E402
 from routers import triage as _triage_router  # noqa: E402
@@ -294,6 +295,7 @@ app.include_router(_triage_router.router)
 app.include_router(_council_router.router)
 app.include_router(_research_router.router)
 app.include_router(_consensus_plan_router.router)
+app.include_router(_message_router.router)
 
 
 @app.exception_handler(OutputGuardrailTripwireTriggered)
@@ -454,125 +456,7 @@ from helpers import (  # noqa: E402
 # Stages 5 + 6 — /api/consensus and /api/plan live in routers/consensus_plan.py.
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Stage 7 — Patient Message
-# ─────────────────────────────────────────────────────────────────────────────
-
-@app.post("/api/message")
-async def patient_message(
-    req: MessageIn,
-    response: Response,
-    user: Optional[AuthUser] = Depends(current_user_maybe_required),
-):
-    model_slug = _resolve_for_request(req, user, response)
-    prompt = (
-        f"Primary diagnosis: {req.consensus.get('primaryDiagnosis')} "
-        f"(confidence {req.consensus.get('confidence')}%, {req.consensus.get('urgency')} urgency)\n"
-        f"ICD code: {req.consensus.get('icdCode', '')}\n"
-        f"Prognosis: {req.consensus.get('prognosis')}\n"
-        f"Key findings: {req.consensus.get('keyFindings')}\n\n"
-        f"Treatment plan:\n{req.plan}\n\n"
-        f"Original patient symptoms: {req.symptoms}"
-    )
-    # When the message guardrail trips on the disclaimer check, give the model
-    # one more shot with an explicit corrective hint instead of hard-failing.
-    # Disclaimer drift is the single most common message-stage trip and a
-    # second pass with the failure quoted back almost always succeeds. Other
-    # subcodes (e.g. message_introduces_unknown_diagnosis) are harder to
-    # self-correct, so they bubble straight to the global 422 handler.
-    #
-    # Note: the retry attempt CAN trip a different guardrail (e.g. the
-    # diagnosis-hallucination check under MESSAGE_HALLUCINATION_CHECK=1) — in
-    # that case the second-attempt 422 carries the new subcode, not
-    # "disclaimer_missing". Surfaced that way intentionally so callers see the
-    # actual failure mode.
-    _DISCLAIMER_RETRY_HINT = (
-        "\n\n---\n"
-        "CRITICAL CORRECTION REQUIRED — your previous response was rejected by "
-        "the output guardrail. The closing sentences MUST contain ALL of:\n"
-        "  (1) a reference to this being an AI advisory system (or AI guidance),\n"
-        "  (2) the words 'physician' / 'doctor' / 'clinician' / 'healthcare provider',\n"
-        "  (3) one of:\n"
-        "      • a verb like 'consult', 'see', 'seek', 'speak', 'talk to', 'discuss', or 'follow up' with a clinician, OR\n"
-        "      • a phrase noting the AI is 'not a substitute / replacement / alternative' for clinical care.\n"
-        "Re-write the entire patient message so the FINAL sentence(s) clearly "
-        "satisfy all three. Do not add any prefatory note; produce the corrected "
-        "message directly."
-    )
-
-    retried = False
-    retry_reason: str | None = None
-    with traced_workflow(
-        "Patient Communication: Empathetic Summary",
-        metadata={
-            "stage": "7-message",
-            "diagnosis": _truncate(str(req.consensus.get("primaryDiagnosis", ""))),
-            "urgency": req.consensus.get("urgency", "unknown"),
-            "symptoms": _truncate(req.symptoms),
-        },
-    ):
-        try:
-            message = await run_agent(
-                message_agent,
-                prompt,
-                model=model_slug,
-                context={"consensus": req.consensus},
-            )
-        except OutputGuardrailTripwireTriggered as exc:
-            info = exc.guardrail_result.output.output_info
-            subcode = info.get("code") if isinstance(info, dict) else None
-            if subcode != "message_disclaimer_missing":
-                raise
-            log.info(
-                "Message disclaimer missing on first attempt; retrying with corrective hint"
-            )
-            retried = True
-            retry_reason = subcode
-            message = await run_agent(
-                message_agent,
-                prompt + _DISCLAIMER_RETRY_HINT,
-                model=model_slug,
-                context={"consensus": req.consensus},
-            )
-
-    return {
-        "message": message,
-        "retried": retried,
-        "retry_reason": retry_reason,
-    }
-
-
-@app.post("/api/message/followup")
-async def patient_message_followup(
-    req: PatientFollowUpIn,
-    response: Response,
-    user: Optional[AuthUser] = Depends(current_user_maybe_required),
-):
-    """Answer patient questions after the final message; optional prior diagnostics for context."""
-    model_slug = _resolve_for_request(req, user, response)
-    prior = ""
-    if req.prior_diagnostics.strip():
-        prior = f"\n\nPrior diagnostics / records the patient cites:\n{req.prior_diagnostics.strip()}"
-
-    prompt = (
-        f"Patient symptoms (original): {req.symptoms}\n\n"
-        f"Intake follow-up answers: {req.followup_answers}\n\n"
-        f"Structured consensus (JSON):\n{json.dumps(req.consensus, ensure_ascii=False)}\n\n"
-        f"Treatment plan:\n{req.plan}\n\n"
-        f"Patient-facing message already sent:\n{req.patient_message}{prior}\n\n"
-        f"---\nPatient's new question:\n{req.question}"
-    )
-    with traced_workflow(
-        "Patient Follow-up Q&A",
-        metadata={
-            "stage": "7b-followup-qa",
-            "question": _truncate(req.question),
-            "has_prior_diagnostics": bool(req.prior_diagnostics.strip()),
-            "symptoms": _truncate(req.symptoms),
-        },
-    ):
-        reply = await run_agent(followup_qa_agent, prompt, model=model_slug)
-    return {"reply": reply}
+# Stage 7 — /api/message and /api/message/followup live in routers/message.py.
 
 
 # ─────────────────────────────────────────────────────────────────────────────

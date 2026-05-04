@@ -422,7 +422,7 @@ class MessageRouteTest(unittest.TestCase):
         self.client = _client()
 
     def test_returns_message_text(self) -> None:
-        import main as _main
+        from routers import message as _message_router
 
         message_text = (
             "Take care of yourself today and rest. Remember, this AI summary is not a "
@@ -432,7 +432,7 @@ class MessageRouteTest(unittest.TestCase):
         async def _fake(*args, **kwargs):
             return message_text
 
-        with patch.object(_main, "run_agent", side_effect=_fake):
+        with patch.object(_message_router, "run_agent", side_effect=_fake):
             r = self.client.post(
                 "/api/message",
                 json={
@@ -742,12 +742,12 @@ class MessageFollowupRouteTest(unittest.TestCase):
         self.client = _client()
 
     def test_returns_followup_text(self) -> None:
-        import main as _main
+        from routers import message as _message_router
 
         async def _fake(*args, **kwargs):
             return "Yes, that's a reasonable interpretation. Discuss with your physician — this AI guidance is informational only."
 
-        with patch.object(_main, "run_agent", side_effect=_fake):
+        with patch.object(_message_router, "run_agent", side_effect=_fake):
             r = self.client.post(
                 "/api/message/followup",
                 json={
