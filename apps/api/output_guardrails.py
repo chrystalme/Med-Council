@@ -444,7 +444,7 @@ _TOXICITY_MODEL = "vertex:google/gemini-2.5-flash-lite"
 
 _toxicity_agent = Agent(
     name="Output Safety Classifier",
-    model=MODEL,
+    model=_TOXICITY_MODEL,
     instructions="""You are a strict safety classifier for clinical assistant outputs.
 
 Classify the assistant's output as SAFE or UNSAFE.
