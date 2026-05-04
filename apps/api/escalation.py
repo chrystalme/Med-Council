@@ -74,8 +74,15 @@ def _resolve_recipient(addr: str) -> str:
 
 def maybe_escalate_oncall(*, consensus: dict, symptoms: str) -> None:
     """
-    Fire-and-forget email via Resend when RESEND_API_KEY and ONCALL_DOCTOR_EMAIL are set
-    and consensus urgency looks high.
+    Fire-and-forget email via Resend when RESEND_API_KEY and ONCALL_DOCTOR_EMAIL
+    are set and consensus urgency looks high.
+
+    Recipient is ONCALL_DOCTOR_EMAIL by default but is passed through
+    `_resolve_recipient`, which honours EMAIL_OVERRIDE_TO. In dev/sandbox
+    envs that means the on-call inbox is shadowed and every escalation
+    lands wherever EMAIL_OVERRIDE_TO points — useful so dev workspaces
+    don't page real clinicians, but worth knowing if you're debugging
+    "why didn't the on-call get the email?" in a non-prod env.
     """
     key = os.environ.get("RESEND_API_KEY", "").strip()
     to = os.environ.get("ONCALL_DOCTOR_EMAIL", "").strip()
