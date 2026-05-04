@@ -18,6 +18,7 @@ your local Postgres; prod: Cloud SQL). Blob/file storage is abstracted in
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
@@ -47,7 +48,6 @@ from pydantic import BaseModel, Field, field_validator
 from auth import AuthUser, auth_configured, current_user_maybe_required, require_pro
 from escalation import (
     ResendNotConfiguredError,
-    is_urgent,
     maybe_escalate_oncall,
     send_patient_email,
 )
@@ -1855,6 +1855,21 @@ async def save_consultation(
 
     con = _get_db()
     try:
+        # psycopg3 with autocommit=False opens an implicit transaction on the
+        # first execute; the SELECT, UPDATE, and INSERT below all run inside
+        # that single transaction and are committed together. A per-user
+        # advisory lock serialises the cap check + INSERT against parallel
+        # save_consultation calls from the same user — without it two
+        # simultaneous Free-tier saves can both pass the cap check and both
+        # INSERT, busting FREE_CONSULTATION_CAP. The lock auto-releases on
+        # commit/rollback (xact-scoped).
+        lock_key = int.from_bytes(
+            hashlib.sha256(user_id.encode("utf-8")).digest()[:8],
+            "big",
+            signed=True,
+        )
+        con.execute("SELECT pg_advisory_xact_lock(%s)", (lock_key,))
+
         case_row = con.execute(
             "SELECT state FROM cases WHERE id = %s AND user_id = %s",
             (req.case_id, user_id),
@@ -1935,6 +1950,14 @@ async def save_consultation(
             "created_at": now,
             "remaining": remaining,
         }
+    except Exception:
+        # Make the rollback explicit so failures surface in psycopg's logs.
+        # close() in the finally also rolls back, but explicit is clearer.
+        try:
+            con.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         con.close()
 
