@@ -592,8 +592,6 @@ export function CaseWorkspace() {
     try {
       const data = await councilJson<{
         message: string;
-        doctor_notified?: boolean;
-        doctor_notify_status?: 'sent' | 'failed' | 'skipped';
         retried?: boolean;
         retry_reason?: string | null;
       }>(`/api/message`, {

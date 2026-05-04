@@ -17,6 +17,24 @@ permissions:
   contents: read
 
 jobs:
+  terraform-shared-config-guard:
+    name: Terraform shared-config guard
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      # `var.secret_names` and `var.ar_repo` are shared between the dev and
+      # prod workspaces — see terraform/imports.tf. If either is overridden in
+      # a per-workspace tfvars file, the next apply on the workspace that
+      # plans last drifts the other workspace's state. Block that at the PR.
+      - name: Reject per-workspace overrides of shared variables
+        run: |
+          set -e
+          if grep -E '^\s*(secret_names|ar_repo)\s*=' terraform/env/*.tfvars; then
+            echo "::error::secret_names / ar_repo must live in variables.tf only — see imports.tf header."
+            exit 1
+          fi
+
   web:
     name: Web (Next.js)
     runs-on: ubuntu-latest
@@ -69,9 +87,20 @@ jobs:
       - name: Import check
         run: uv run python -c "import main; import auth; import council; print('import ok')"
 
-      # Tests are non-blocking until the suite is hermetic — some tests today
-      # touch live providers (Langfuse, OpenAI). Drop continue-on-error once
-      # those are stubbed or marked with a network/integration mark.
-      - name: Tests
-        run: uv run python -m unittest discover tests -v
-        continue-on-error: true
+      # All tests under apps/api/tests/ stub network calls (Langfuse, OpenAI,
+      # Resend, urllib) — verified by audit. Failures here block the merge.
+      # Coverage runs alongside; the gate ratchets up only — never lower
+      # the --fail-under floor, raise it as new modules get covered.
+      # Source / omit config lives in pyproject.toml [tool.coverage.*].
+      - name: Tests + coverage
+        run: |
+          uv run --with coverage python -m coverage run -m unittest discover tests -v
+          uv run --with coverage python -m coverage report --fail-under=70
+          uv run --with coverage python -m coverage xml -o coverage.xml
+
+      - name: Upload coverage artefact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: api-coverage
+          path: apps/api/coverage.xml

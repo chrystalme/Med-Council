@@ -315,7 +315,19 @@ _CLINICIAN_NOUN_RE = re.compile(
     r"\b(physician|doctor|clinician|healthcare provider|medical professional)\b",
     re.IGNORECASE,
 )
-_RECOMMEND_VERB_RE = re.compile(r"\b(consult|see|speak|talk)\b", re.IGNORECASE)
+# Verbs / verb phrases that "satisfy" the recommend-action signal. Kept narrow
+# so the regex stays conservative (false-negatives are recoverable via the
+# disclaimer retry; false-positives are a real safety miss). Lacks-replacement
+# phrasings — "not a substitute for", "no replacement for", "in lieu of" — are
+# matched by `_DISCLAIMER_REPLACE_RE` below; either signal counts.
+_RECOMMEND_VERB_RE = re.compile(
+    r"\b(consult|see|seek|speak|talk|discuss|follow up|reach out)\b",
+    re.IGNORECASE,
+)
+_DISCLAIMER_REPLACE_RE = re.compile(
+    r"\b(replace(?:ment)?|substitut(?:e|ion)|in lieu of|alternative to)\b",
+    re.IGNORECASE,
+)
 
 # Heuristic noun-phrase pattern for diagnosis-like terms in patient message.
 # Catches multi-syllable terms ending in -itis/-osis/-emia/-pathy/-oma; far from
@@ -346,10 +358,13 @@ def _disclaimer_present(text: str) -> bool:
     # Use whichever window is longer — sentences are usually richer; the
     # 30% floor catches degenerate messages that lack sentence punctuation.
     window = tail_sentences if len(tail_sentences) >= len(tail) else tail
+    has_action = bool(
+        _RECOMMEND_VERB_RE.search(window) or _DISCLAIMER_REPLACE_RE.search(window)
+    )
     return bool(
         _AI_NOUN_RE.search(window)
         and _CLINICIAN_NOUN_RE.search(window)
-        and _RECOMMEND_VERB_RE.search(window)
+        and has_action
     )
 
 
@@ -444,7 +459,7 @@ _TOXICITY_MODEL = "vertex:google/gemini-2.5-flash-lite"
 
 _toxicity_agent = Agent(
     name="Output Safety Classifier",
-    model=MODEL,
+    model=_TOXICITY_MODEL,
     instructions="""You are a strict safety classifier for clinical assistant outputs.
 
 Classify the assistant's output as SAFE or UNSAFE.

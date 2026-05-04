@@ -18,17 +18,17 @@ your local Postgres; prod: Cloud SQL). Blob/file storage is abstracted in
 from __future__ import annotations
 
 import asyncio
+import hashlib
 import json
 import logging
 import os
-import re
 import secrets
 import uuid
 
 log = logging.getLogger("medai.api")
 from datetime import datetime, timezone
 from pathlib import Path
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager
 from typing import Annotated, Any, Optional
 from dotenv import load_dotenv
 
@@ -36,8 +36,6 @@ from dotenv import load_dotenv
 load_dotenv(Path(__file__).resolve().parent / ".env", override=True)
 load_dotenv(override=True)
 
-from urllib.parse import quote_plus
-from urllib.request import Request, urlopen
 from fastapi import Depends, FastAPI, HTTPException, Request, Response, UploadFile, File, Form
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
@@ -47,15 +45,12 @@ from pydantic import BaseModel, Field, field_validator
 from auth import AuthUser, auth_configured, current_user_maybe_required, require_pro
 from escalation import (
     ResendNotConfiguredError,
-    is_urgent,
     maybe_escalate_oncall,
-    notify_doctor_with_message,
     send_patient_email,
 )
 from rate_limit import enforce_rate_limit, rate_limit_enabled
 
 from agents import (
-    Agent,
     InputGuardrailTripwireTriggered,
     OutputGuardrailTripwireTriggered,
     set_default_openai_api,
@@ -63,19 +58,26 @@ from agents import (
     set_tracing_export_api_key,
 )
 from agents.models.multi_provider import MultiProvider
-from agents.run import Runner
-from agents.run_config import RunConfig
-from agents.tracing import custom_span, trace as workflow_trace
-from agents.tracing.setup import get_trace_provider
+from agents.tracing import custom_span
 
 from council_schemas import (
-    IntakeFollowupOut,
     PatientSymptomsIn,
-    parse_intake_followup_text,
     parse_research_papers,
 )
 from consultation_memory import build_consultation_memory_text
-from langfuse_tracing import configure_langfuse, flush_langfuse, langfuse_attributes
+from langfuse_tracing import configure_langfuse
+
+from agent_runtime import (
+    _DirectOpenAICompatibleProvider,
+    _truncate,
+    format_intake_questions_for_api as _format_intake_questions_for_api,
+    parse_json,
+    resolve_for_request as _resolve_for_request,
+    run_agent,
+    run_agent_raw,  # re-exported so tests/output_guardrails.py can patch main.run_agent_raw
+    set_providers as _set_runtime_providers,
+    traced_workflow,
+)
 
 from council import (
     ALL_SPECIALIST_IDS,
@@ -84,7 +86,6 @@ from council import (
     SPECIALIST_META,
     consensus_agent,
     deliberation_selector_agent,
-    feedback_agent,
     followup_qa_agent,
     intake_agent,
     message_agent,
@@ -92,46 +93,15 @@ from council import (
     research_agent,
     triage_agent,
 )
-from council_registry import DEFAULT_MODEL_KEY, models_for_plan, resolve_model
-
-# Two model providers wired side-by-side:
-#   • `_vertex_model_provider`  — Vertex AI (default; all in-house models)
-#   • `_council_model_provider` — OpenRouter (only `openai/gpt-5` today)
-# Registry slugs prefixed with `vertex:` route to the Vertex client.
-_council_model_provider: MultiProvider | None = None
-# MultiProvider interprets `openai/…` / `anthropic/…` prefixes as routing hints
-# and strips them, which breaks OpenAI-compatible endpoints that expect the
-# full slug intact (Vertex AI's OpenAI-compat endpoint, Groq, Together, …).
-# The passthrough provider below keeps the slug verbatim.
-_vertex_model_provider = None  # type: ignore[var-annotated]
-
-_VERTEX_ROUTING_PREFIX = "vertex:"
-
-
-class _DirectOpenAICompatibleProvider:
-    """Minimal ModelProvider that sends the slug to the client verbatim.
-
-    MultiProvider tries to be clever about `openai/…` / `anthropic/…` slugs,
-    which breaks OpenAI-compatible endpoints (Groq, Together, …) that expect
-    the full slug intact. This provider always instantiates
-    `OpenAIChatCompletionsModel(model=slug, openai_client=client)` — no parsing.
-    """
-
-    def __init__(self, client, *, default_model: str):
-        from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
-
-        self._client = client
-        self._default_model = default_model
-        self._ModelClass = OpenAIChatCompletionsModel
-
-    def get_model(self, model_name):
-        name = model_name or self._default_model
-        return self._ModelClass(model=name, openai_client=self._client)
+from council_registry import DEFAULT_MODEL_KEY, models_for_plan
 
 # ── Persistence (Postgres via db.py; schema owned by Alembic) ────────────────
 import db as _db
 
-FEEDBACK_SECRET = os.environ.get("FEEDBACK_SECRET") or os.environ.get("FEEDBACK_TOKEN") or secrets.token_urlsafe(32)
+# FEEDBACK_SECRET lives in routers/feedback.py. Re-exported here for the
+# startup-banner print below; if you change one, change the other or move
+# both behind a shared module.
+from routers.feedback import FEEDBACK_SECRET  # noqa: E402
 
 
 def _run_migrations() -> None:
@@ -161,77 +131,7 @@ def _get_db():
     return _db.connect()
 
 
-def _truncate(text: str, max_len: int = 120) -> str:
-    """Truncate text for trace metadata (keeps traces searchable without bloating)."""
-    t = (text or "").strip()
-    return t[:max_len] + "…" if len(t) > max_len else t
-
-
-def _json_object(raw: Any) -> dict[str, Any]:
-    if isinstance(raw, dict):
-        return raw
-    if isinstance(raw, str):
-        try:
-            parsed = json.loads(raw or "{}")
-        except json.JSONDecodeError:
-            return {}
-        return parsed if isinstance(parsed, dict) else {}
-    return {}
-
-
-def _flush_sdk_traces() -> None:
-    """Push queued traces immediately (BatchTraceProcessor defaults to ~5s delay)."""
-    try:
-        get_trace_provider().force_flush()
-    except Exception:
-        pass
-    flush_langfuse()
-
-
-def _coerce_trace_metadata(metadata: dict | None) -> dict[str, str]:
-    """Normalise trace metadata values to strings.
-
-    The OpenAI tracing ingestion endpoint requires every metadata value to be a
-    string. Different providers/models can leak non-string values (ints, bools,
-    None) through call sites. Coerce here so every call site is compatible.
-    """
-    if not metadata:
-        return {}
-    out: dict[str, str] = {}
-    for k, v in metadata.items():
-        if v is None:
-            continue
-        if isinstance(v, bool):
-            out[str(k)] = "true" if v else "false"
-        elif isinstance(v, (str, int, float)):
-            out[str(k)] = str(v)
-        else:
-            try:
-                out[str(k)] = json.dumps(v, default=str, ensure_ascii=False)
-            except Exception:
-                out[str(k)] = str(v)
-    return out
-
-
-@contextmanager
-def traced_workflow(name: str, *, group_id: str | None = None, metadata: dict | None = None):
-    """OpenAI Agents SDK workflow trace + immediate export flush for the dashboard.
-
-    Args:
-        name: Workflow name shown in the trace dashboard.
-        group_id: Optional session/conversation ID to link related traces.
-        metadata: Arbitrary key-value pairs attached to the trace for filtering/search.
-            All values are coerced to strings (tracing ingestion requires string values).
-    """
-    trace_metadata = _coerce_trace_metadata(metadata)
-    with langfuse_attributes(
-        session_id=group_id,
-        metadata=trace_metadata,
-        tags=[trace_metadata["stage"]] if "stage" in trace_metadata else None,
-    ):
-        with workflow_trace(name, group_id=group_id, metadata=trace_metadata):
-            yield
-    _flush_sdk_traces()
+# _json_object lives in helpers.py; aliased below for the routes still here.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -249,8 +149,6 @@ async def lifespan(app: FastAPI):
     if not openai_key:
         raise RuntimeError("OPENAI_API_KEY is not set (used for tracing only).")
 
-    global _council_model_provider, _vertex_model_provider
-
     # Point the OpenAI Agents SDK default OpenAI client at OpenRouter (chat completions).
     openrouter_client = AsyncOpenAI(
         api_key=openrouter_key,
@@ -265,10 +163,11 @@ async def lifespan(app: FastAPI):
     set_tracing_export_api_key(openai_key)
     langfuse_enabled = configure_langfuse()
 
-    _council_model_provider = MultiProvider(
+    council_provider = MultiProvider(
         openai_client=openrouter_client,
         unknown_prefix_mode="model_id",
     )
+    vertex_provider: _DirectOpenAICompatibleProvider | None = None
 
     # Vertex AI: serves every in-house model — the free-tier default
     # (gemini-2.5-flash-lite) and the Pro-tier Gemini / Claude / Llama entries.
@@ -311,7 +210,7 @@ async def lifespan(app: FastAPI):
                 base_url=vertex_base,
                 http_client=vertex_http,
             )
-            _vertex_model_provider = _DirectOpenAICompatibleProvider(
+            vertex_provider = _DirectOpenAICompatibleProvider(
                 vertex_client, default_model="google/gemini-2.5-flash-lite"
             )
         except Exception as exc:
@@ -327,9 +226,10 @@ async def lifespan(app: FastAPI):
             "Vertex AI calls will return provider_unavailable. Set it on the container."
         )
 
+    _set_runtime_providers(council=council_provider, vertex=vertex_provider)
     _run_migrations()
 
-    default_label = f"vertex:{_vertex_model_provider._default_model}" if _vertex_model_provider else "none"
+    default_label = f"vertex:{vertex_provider._default_model}" if vertex_provider else "none"
     print(f"✓ Inference  → Vertex AI  ({default_label}) + OpenRouter (gpt-5 only)")
     tracing_targets = "platform.openai.com/traces + Langfuse" if langfuse_enabled else "platform.openai.com/traces"
     print(f"✓ Tracing    → {tracing_targets}")
@@ -374,6 +274,16 @@ app.add_middleware(
     allow_methods=["GET", "POST", "PATCH", "DELETE", "OPTIONS"],
     allow_headers=["Authorization", "Content-Type", "X-Request-ID"],
 )
+
+
+# ── Routers (extracted from main.py) ────────────────────────────────────────
+from routers import cases as _cases_router  # noqa: E402
+from routers import feedback as _feedback_router  # noqa: E402
+from routers import meta as _meta_router  # noqa: E402
+
+app.include_router(_meta_router.router)
+app.include_router(_feedback_router.router)
+app.include_router(_cases_router.router)
 
 
 @app.exception_handler(OutputGuardrailTripwireTriggered)
@@ -451,345 +361,11 @@ async def _rate_limit_middleware(request: Request, call_next):
     return await call_next(request)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
-_TRANSIENT_PROVIDER_MARKERS = (
-    "524",                 # Cloudflare origin timeout (common on free OpenRouter models)
-    "502",                 # Bad gateway
-    "503",                 # Service unavailable
-    "504",                 # Gateway timeout
-    "provider returned error",
-    "no choices",
-    "upstream",
-    "timeout",
-    "timed out",
-    "rate limit",
-    "overloaded",
-    "try again",
-)
+# Runtime helpers (run_agent, run_agent_raw, traced_workflow, parse_json, …)
+# now live in agent_runtime.py and are imported at the top of this file.
 
 
-def _is_transient_provider_error(exc: BaseException) -> bool:
-    """Detect OpenRouter/provider hiccups that are worth retrying."""
-    msg = (str(exc) or "").lower()
-    if any(marker in msg for marker in _TRANSIENT_PROVIDER_MARKERS):
-        return True
-    status = getattr(exc, "status_code", None) or getattr(exc, "http_status", None)
-    return status in {502, 503, 504, 524, 429}
-
-
-def _is_bad_model_error(exc: BaseException) -> bool:
-    """HTTP 400 from the provider about the model id — retrying won't help.
-
-    Matches OpenRouter's "not a valid model ID" and OpenAI/Groq's equivalents
-    so the caller can surface a structured "pick another model" prompt.
-    """
-    msg = str(exc).lower()
-    if "not a valid model" in msg or "model not found" in msg or "invalid model" in msg:
-        return True
-    if "unknown model" in msg:
-        return True
-    status = getattr(exc, "status_code", None) or getattr(exc, "http_status", None)
-    if status == 400 and "model" in msg:
-        return True
-    return False
-
-
-def _resolve_runtime_model(agent: Agent, model: str | None):
-    """Pick the provider + concrete model for this run.
-
-    The `groq:` routing prefix on a slug steers the call to the Groq client.
-    Everything else stays on OpenRouter. Falls through to the agent's bound
-    model if no per-run override is supplied.
-
-    For the Groq path we construct an `OpenAIChatCompletionsModel` instance
-    here and return it as the `model` value for RunConfig. This bypasses the
-    SDK's provider-lookup path — which we observed does NOT always respect
-    `RunConfig.model_provider` when the agent's own `.model` string has an
-    unknown prefix, causing the raw `groq:…` slug to leak into OpenRouter.
-    RunConfig accepts a concrete Model instance and uses it directly.
-    """
-    effective = model if model else getattr(agent, "model", None)
-    if isinstance(effective, str) and effective.startswith(_VERTEX_ROUTING_PREFIX):
-        clean = effective[len(_VERTEX_ROUTING_PREFIX):]
-        if _vertex_model_provider is None:
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "code": "vertex_not_configured",
-                    "message": (
-                        "Vertex AI is not wired on this container. Ensure VERTEX_PROJECT "
-                        "is set and the runtime service account has roles/aiplatform.user, "
-                        "then restart. See terraform/main.tf for the IAM binding."
-                    ),
-                },
-            )
-        # Return a pre-bound Model instance — Runner uses it without any further
-        # provider routing, so the `vertex:` slug never leaks to another client.
-        model_instance = _vertex_model_provider.get_model(clean)
-        return _vertex_model_provider, model_instance
-    return _council_model_provider or MultiProvider(), effective if isinstance(effective, str) else None
-
-
-async def run_agent_raw(
-    agent: Agent,
-    prompt: str,
-    *,
-    model: str | None = None,
-    context: Any = None,
-) -> Any:
-    """Run an agent and return `final_output`.
-
-    Routes between Vertex (in-house) and OpenRouter (GPT-5 only) based on the
-    slug's `vertex:` prefix, then wraps the Runner in a retry loop for
-    transient provider errors — Cloudflare 524 origin timeouts, empty-choices
-    responses, 5xx upstream failures, and rate-limit backpressure.
-    """
-    provider, clean_model = _resolve_runtime_model(agent, model)
-
-    # IMPORTANT: we observed that openai-agents' Runner ignores
-    # RunConfig.model_provider / RunConfig.model when the Agent's own `.model`
-    # field is a string — it falls back to the global `set_default_openai_client`
-    # (OpenRouter) and sends the raw string slug, leaking our `vertex:…`
-    # prefix to OpenRouter which 400s.
-    #
-    # Fix: clone the agent with the pre-bound Model instance so `agent.model`
-    # IS the Model itself. The Runner then uses it directly — no provider
-    # lookup, no global-client fallback, no slug to leak. The clone is cheap
-    # and keeps the shared agent registry in council.py immutable per-request.
-    # openai-agents v0.14 resolves `agent.model` to a string first and then
-    # routes via the global default client, so a plain `RunConfig.model_provider`
-    # override isn't honored. Cloning the agent with the pre-bound Model
-    # instance forces Runner's `get_model()` down the `isinstance(agent.model,
-    # Model)` branch — no string, no provider lookup, no fallback to the
-    # global OpenRouter client. Falls back to the original agent if clone
-    # fails so we never crash on this transformation alone.
-    run_agent = agent
-    if clean_model is not None and not isinstance(clean_model, str):
-        try:
-            run_agent = agent.clone(model=clean_model)
-        except Exception:
-            run_agent = agent
-
-    rc = RunConfig(
-        model_provider=provider,
-        model=clean_model,  # belt-and-braces; the clone above is the real fix
-        trace_include_sensitive_data=True,
-    )
-
-    max_attempts = 3
-    last_exc: BaseException | None = None
-    for attempt in range(1, max_attempts + 1):
-        try:
-            result = await Runner.run(run_agent, prompt, run_config=rc, context=context)
-            return result.final_output
-        except Exception as exc:
-            last_exc = exc
-            if _is_bad_model_error(exc):
-                # Non-retryable: the model id is wrong or the provider doesn't
-                # know it. Bail out early so the caller gets a structured 400
-                # instead of three pointless retries.
-                break
-            if not _is_transient_provider_error(exc) or attempt == max_attempts:
-                break
-            delay = 1.5 * (2 ** (attempt - 1))  # 1.5s → 3s → 6s
-            log.warning(
-                "Transient provider error on attempt %d/%d (%s); retrying in %.1fs",
-                attempt, max_attempts, exc, delay,
-            )
-            await asyncio.sleep(delay)
-
-    # All retries exhausted (or we bailed early on a non-retryable error).
-    assert last_exc is not None
-    if _is_bad_model_error(last_exc):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "bad_model",
-                "message": (
-                    "The selected model was rejected by the provider. Pick a "
-                    "different model from the selector and try again."
-                ),
-                "provider_message": str(last_exc)[:500],
-            },
-        ) from last_exc
-    if _is_transient_provider_error(last_exc):
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "code": "provider_unavailable",
-                "message": (
-                    "The model provider is temporarily unavailable "
-                    f"({type(last_exc).__name__}). This usually clears in a few seconds "
-                    "— try again, or switch to a different model."
-                ),
-            },
-        ) from last_exc
-    raise last_exc
-
-
-async def run_agent(
-    agent: Agent,
-    prompt: str,
-    *,
-    model: str | None = None,
-    context: Any = None,
-) -> str:
-    """Run an agent and return its final output as a string."""
-    output = await run_agent_raw(agent, prompt, model=model, context=context)
-    if isinstance(output, str):
-        return output
-    return output.model_dump_json() if hasattr(output, "model_dump_json") else str(output)
-
-
-def _resolve_for_request(
-    req: BaseModel,
-    user: "AuthUser | None",
-    response: "Response",
-) -> str:
-    """Resolve the OpenRouter slug for this request, set downgrade headers, return the slug.
-
-    Every pipeline endpoint calls this to look up the user's choice of model
-    from the allowlist, enforce the free/pro tier split silently, and pass the
-    slug into run_agent(...). `req.model` is an allowlist key (e.g.
-    "claude-opus-4-7"); the returned value is the OpenRouter slug.
-    """
-    from auth import effective_plan  # local import to avoid circular at module load
-
-    requested = getattr(req, "model", None)
-    plan = effective_plan(user)
-    slug, downgraded = resolve_model(requested, plan)
-    if downgraded:
-        response.headers["X-Model-Downgraded"] = "1"
-        response.headers["X-Model-Downgrade-Reason"] = "plan_required"
-    return slug
-
-
-def _format_intake_questions_for_api(out: Any) -> str:
-    """Parse model output into IntakeFollowupOut, then numbered lines for the UI."""
-    if isinstance(out, IntakeFollowupOut):
-        model = out
-    else:
-        model = parse_intake_followup_text(out if isinstance(out, str) else str(out))
-    return "\n".join(f"{i + 1}. {q.strip()}" for i, q in enumerate(model.questions))
-
-
-def parse_json(raw: str) -> dict | list:
-    """
-    Robustly extract JSON from model output.
-    Handles: markdown fences, leading prose, trailing text.
-    """
-    # Strip ```json ... ``` fences
-    clean = re.sub(r"```(?:json)?\s*", "", raw).replace("```", "").strip()
-
-    # Direct parse
-    try:
-        return json.loads(clean)
-    except json.JSONDecodeError:
-        pass
-
-    # Find first {...} or [...]
-    match = re.search(r"(\{[\s\S]*\}|\[[\s\S]*\])", clean)
-    if match:
-        try:
-            return json.loads(match.group(1))
-        except json.JSONDecodeError:
-            pass
-
-    raise ValueError(f"No valid JSON found in model output. Raw (first 400 chars):\n{raw[:400]}")
-
-
-def _pubmed_search_papers(term: str, *, retmax: int = 4) -> list[dict]:
-    """
-    Model-agnostic safety net: query PubMed directly and return paper cards.
-
-    Uses NCBI E-utilities (esearch + esummary). If anything fails, returns [].
-    """
-    t = (term or "").strip()
-    if not t:
-        return []
-
-    try:
-        # PubMed search can be brittle with long, highly specific terms. Try a few progressively
-        # simpler queries to maximize hit-rate, regardless of model output format.
-        words = re.findall(r"[a-zA-Z]{3,}", t.lower())
-        simplified = " ".join(words[:10]) if words else t
-
-        # A high-recall query shape for typical clinical text.
-        pain_terms = ["chest pain", "angina", "chest tightness", "chest pressure"]
-        ex_terms = ["exertion", "exercise", "exertional"]
-        high_recall = f"({' OR '.join(pain_terms)}) AND ({' OR '.join(ex_terms)})"
-
-        candidates = [
-            t[:8000],
-            simplified[:400],
-            high_recall,
-            (high_recall + " review").strip(),
-            "chest pain review",
-        ]
-
-        ids: list[str] = []
-        for cand in candidates:
-            if not cand.strip():
-                continue
-            q = quote_plus(cand)
-            esearch = (
-                "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esearch.fcgi"
-                f"?db=pubmed&retmode=json&retmax={int(retmax)}&sort=relevance&term={q}"
-            )
-            req = Request(esearch, headers={"User-Agent": "MedAI-Council/1.0 (demo)"})
-            with urlopen(req, timeout=6) as r:
-                payload = json.loads(r.read().decode("utf-8", errors="replace"))
-            got = payload.get("esearchresult", {}).get("idlist", []) or []
-            got = [str(x) for x in got if str(x).isdigit()]
-            if got:
-                ids = got
-                break
-        if not ids:
-            return []
-
-        id_csv = ",".join(ids)
-        esummary = (
-            "https://eutils.ncbi.nlm.nih.gov/entrez/eutils/esummary.fcgi"
-            f"?db=pubmed&retmode=json&id={id_csv}"
-        )
-        req2 = Request(esummary, headers={"User-Agent": "MedAI-Council/1.0 (demo)"})
-        with urlopen(req2, timeout=6) as r:
-            summ = json.loads(r.read().decode("utf-8", errors="replace"))
-
-        result = summ.get("result", {}) if isinstance(summ, dict) else {}
-        out: list[dict] = []
-        for pid in ids:
-            item = result.get(pid, {})
-            if not isinstance(item, dict):
-                continue
-            title = str(item.get("title", "") or "").strip() or f"PubMed citation (PMID {pid})"
-            source = str(item.get("source", "") or "").strip() or "—"
-            pubdate = str(item.get("pubdate", "") or "").strip()
-            year = pubdate[:4] if pubdate[:4].isdigit() else "—"
-            authors = item.get("authors", [])
-            if isinstance(authors, list) and authors:
-                names = [a.get("name") for a in authors if isinstance(a, dict) and a.get("name")]
-                authors_s = (", ".join(names[:3]) + (" et al." if len(names) > 3 else "")) if names else "—"
-            else:
-                authors_s = "—"
-            out.append(
-                {
-                    "title": title,
-                    "authors": authors_s,
-                    "journal": source,
-                    "year": year,
-                    "relevance": "PubMed search result (model-agnostic fallback).",
-                    "summary": "Open the PubMed link for abstract and applicability to this specific case.",
-                    "pmid": pid,
-                    "url": f"https://pubmed.ncbi.nlm.nih.gov/{pid}/",
-                }
-            )
-        return out[:retmax]
-    except Exception:
-        return []
+from external.pubmed import search_papers as _pubmed_search_papers
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -799,85 +375,16 @@ def _pubmed_search_papers(term: str, *, retmax: int = 4) -> list[dict]:
 SymptomsIn = PatientSymptomsIn
 
 
-class _ModeledRequest(BaseModel):
-    """Mixin: every agent-running endpoint accepts an optional `model` key.
-
-    The key must match an entry in council_registry.MODELS. Free-tier users
-    asking for a Pro model are silently downgraded (see resolve_model),
-    with X-Model-Downgraded: 1 set on the response.
-
-    Also an optional `case_id` so Phase 3.5 attachments can be fetched and
-    injected into the prompt without needing a separate lookup roundtrip.
-    """
-
-    model: str | None = None
-    case_id: str | None = None
-
-
-class TriageIn(_ModeledRequest):
-    symptoms: str
-    followup_answers: str
-
-
-class SpecialistIn(_ModeledRequest):
-    specialist_id: str
-    symptoms: str
-    followup_answers: str
-    prior_assessments: list[dict]
-    council_context: str = ""
-
-
-class PhysicianIn(_ModeledRequest):
-    """Alias for SpecialistIn to match frontend naming"""
-    physician_id: str
-    symptoms: str
-    followup_answers: str
-    prior_assessments: list[dict]
-    council_context: str = ""
-
-
-class ResearchIn(_ModeledRequest):
-    symptoms: str
-    followup_answers: str
-    assessments: list[dict]
-
-
-class ConsensusIn(_ModeledRequest):
-    symptoms: str
-    followup_answers: str
-    assessments: list[dict]
-    research: list[dict]
-
-
-class PlanIn(_ModeledRequest):
-    symptoms: str
-    followup_answers: str
-    consensus: dict
-    assessments: list[dict]
-
-
-class MessageIn(_ModeledRequest):
-    symptoms: str
-    consensus: dict
-    plan: str
-    doctor_email: str | None = None
-
-
-class PatientFollowUpIn(_ModeledRequest):
-    """Post–patient-message Q&A; optional prior diagnostics for reconciling with council output."""
-
-    question: Annotated[str, Field(min_length=1, max_length=8000)]
-    prior_diagnostics: str = ""
-    symptoms: Annotated[str, Field(min_length=1)]
-    followup_answers: str = ""
-    consensus: dict
-    plan: str
-    patient_message: str
-
-    @field_validator("question", "prior_diagnostics", "symptoms", "followup_answers", "patient_message", mode="before")
-    @classmethod
-    def strip_text(cls, v: object) -> object:
-        return v.strip() if isinstance(v, str) else v
+from schemas import (
+    ConsensusIn,
+    MessageIn,
+    PatientFollowUpIn,
+    PhysicianIn,
+    PlanIn,
+    ResearchIn,
+    SpecialistIn,
+    TriageIn,
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -885,352 +392,28 @@ class PatientFollowUpIn(_ModeledRequest):
 # ─────────────────────────────────────────────────────────────────────────────
 
 
-@app.get("/")
-async def serve_root():
-    """Root of the API service.
-
-    In the GCP deploy the UI lives on a separate Cloud Run service, so `/` here
-    redirects the browser to `WEB_BASE_URL` when that env var is set (which it
-    is on prod). Without it — local dev, ad-hoc curl — we return a minimal
-    JSON pointer instead of the legacy `static/index.html`, which was the old
-    Vercel-era UI and is retired.
-    """
-    # `Cache-Control: no-store` prevents browsers from caching the old
-    # pre-redirect HTML body (saw that cause "old UI still showing" reports
-    # after the retirement of static/index.html).
-    no_cache_headers = {"Cache-Control": "no-store", "Pragma": "no-cache"}
-    web_url = os.environ.get("WEB_BASE_URL", "").strip()
-    if web_url:
-        return RedirectResponse(web_url, status_code=302, headers=no_cache_headers)
-    return JSONResponse(
-        {
-            "service": "MedAI Council API",
-            "docs": "/docs",
-            "health": "/health",
-            "ui": "UI lives on a separate Cloud Run service — set WEB_BASE_URL on this container to auto-redirect.",
-        },
-        headers=no_cache_headers,
-    )
+# Meta routes (/, /health, /specialists, /agents, /api/me, /api/models) live
+# in routers/meta.py and are registered below the FastAPI() construction.
 
 
-@app.get("/index.html", include_in_schema=False)
-async def serve_index_alias():
-    return RedirectResponse("/", status_code=307)
+# Cases CRUD (/api/cases*) lives in routers/cases.py.
+# /api/feedback and /feedback/{token} live in routers/feedback.py.
+# _cases_user_id, _utc_now, _json_object are now in helpers.py — main.py
+# re-aliases them below for the routes still here (consultations, attachments,
+# etc.). Drop the aliases when those routes move.
 
-
-@app.get("/health")
-def health():
-    return {
-        "status": "ok",
-        "service": "MedAI Council",
-        "version": "3.0.0",
-        "model": MODEL,
-        "inference": "openrouter",
-    }
-
-
-@app.get("/specialists")
-def list_specialists():
-    return {
-        "specialists": [{"id": sid, **meta} for sid, meta in SPECIALIST_META.items()]
-    }
-
-
-@app.get("/agents")
-def list_agents():
-    """List all available physicians/agents for the council"""
-    return {
-        "physicians": [
-            {
-                "id": sid,
-                "name": meta["name"],
-                "specialty": meta["specialty"],
-                "initials": meta["initials"],
-            }
-            for sid, meta in SPECIALIST_META.items()
-        ]
-    }
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Feedback
-# ─────────────────────────────────────────────────────────────────────────────
-
-class FeedbackIn(BaseModel):
-    rating: str = Field(pattern=r"^(up|down)$")
-    comment: str = Field(default="", max_length=2000)
-    symptoms: str = Field(default="")
-    diagnosis: str = Field(default="")
-
-
-def _utc_now() -> str:
-    return datetime.now(timezone.utc).isoformat()
-
-
-def _cases_user_id(user: Optional[AuthUser]) -> str:
-    return user.user_id if user else ""
-
-
-class CaseCreateIn(BaseModel):
-    title: str = Field(default="", max_length=500)
-
-
-class CasePatchIn(BaseModel):
-    state: dict[str, Any]
-    title: str | None = Field(default=None, max_length=500)
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Case persistence (Step 3)
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-@app.post("/api/cases")
-async def cases_create(req: CaseCreateIn, user: Optional[AuthUser] = Depends(current_user_maybe_required)):
-    cid = str(uuid.uuid4())
-    uid = _cases_user_id(user)
-    now = _utc_now()
-    con = _get_db()
-    con.execute(
-        "INSERT INTO cases (id, user_id, title, state, created_at, updated_at) VALUES (%s,%s,%s,%s,%s,%s)",
-        (cid, uid, req.title or "Untitled case", "{}", now, now),
-    )
-    con.commit()
-    con.close()
-    return {"id": cid, "title": req.title or "Untitled case", "created_at": now}
-
-
-@app.get("/api/cases")
-def cases_list(user: Optional[AuthUser] = Depends(current_user_maybe_required)):
-    uid = _cases_user_id(user)
-    con = _get_db()
-    rows = con.execute(
-        "SELECT id, title, updated_at FROM cases WHERE user_id = %s ORDER BY updated_at DESC LIMIT 50",
-        (uid,),
-    ).fetchall()
-    con.close()
-    return {"cases": [{"id": r["id"], "title": r["title"], "updated_at": r["updated_at"]} for r in rows]}
-
-
-@app.get("/api/cases/{case_id}")
-def cases_get(case_id: str, user: Optional[AuthUser] = Depends(current_user_maybe_required)):
-    uid = _cases_user_id(user)
-    con = _get_db()
-    row = con.execute(
-        "SELECT id, user_id, title, state, created_at, updated_at FROM cases WHERE id = %s",
-        (case_id,),
-    ).fetchone()
-    con.close()
-    if not row or row["user_id"] != uid:
-        raise HTTPException(status_code=404, detail="Case not found")
-    # JSONB returns a dict via psycopg; string fallback handles legacy sqlite rows.
-    raw_state = row["state"]
-    if isinstance(raw_state, str):
-        try:
-            state = json.loads(raw_state or "{}")
-        except json.JSONDecodeError:
-            state = {}
-    else:
-        state = raw_state or {}
-    return {
-        "id": row["id"],
-        "title": row["title"],
-        "state": state,
-        "created_at": row["created_at"],
-        "updated_at": row["updated_at"],
-    }
-
-
-@app.patch("/api/cases/{case_id}")
-async def cases_patch(
-    case_id: str,
-    req: CasePatchIn,
-    user: Optional[AuthUser] = Depends(current_user_maybe_required),
-):
-    uid = _cases_user_id(user)
-    con = _get_db()
-    row = con.execute("SELECT user_id FROM cases WHERE id = %s", (case_id,)).fetchone()
-    if not row or row["user_id"] != uid:
-        con.close()
-        raise HTTPException(status_code=404, detail="Case not found")
-    now = _utc_now()
-    state_json = json.dumps(req.state, ensure_ascii=False)
-    if req.title is not None:
-        con.execute(
-            "UPDATE cases SET state = %s, title = %s, updated_at = %s WHERE id = %s",
-            (state_json, req.title[:500], now, case_id),
-        )
-    else:
-        con.execute(
-            "UPDATE cases SET state = %s, updated_at = %s WHERE id = %s",
-            (state_json, now, case_id),
-        )
-    con.commit()
-    con.close()
-    return {"id": case_id, "updated_at": now}
-
-
-@app.post("/api/feedback", dependencies=[Depends(current_user_maybe_required)])
-async def submit_feedback(req: FeedbackIn):
-    prompt = json.dumps({
-        "rating": req.rating,
-        "comment": req.comment,
-        "symptoms": req.symptoms,
-        "diagnosis": req.diagnosis,
-    })
-    with traced_workflow(
-        "Patient Feedback",
-        metadata={"stage": "feedback", "rating": req.rating},
-    ):
-        await run_agent(feedback_agent, prompt)
-    return {"status": "ok"}
-
-
-@app.get("/feedback/{token}")
-def view_feedback(token: str):
-    if not secrets.compare_digest(token, FEEDBACK_SECRET):
-        raise HTTPException(status_code=404, detail="Not found")
-    con = _get_db()
-    rows = con.execute(
-        "SELECT id, rating, comment, symptoms, diagnosis, created_at FROM feedback ORDER BY id DESC"
-    ).fetchall()
-    con.close()
-
-    up = sum(1 for r in rows if r["rating"] == "up")
-    down = sum(1 for r in rows if r["rating"] == "down")
-
-    rows_html = ""
-    for r in rows:
-        emoji = "\U0001f44d" if r["rating"] == "up" else "\U0001f44e"
-        comment = r["comment"] or "\u2014"
-        rows_html += (
-            f'<tr><td>{r["id"]}</td><td style="font-size:22px">{emoji}</td>'
-            f'<td>{_h(comment)}</td><td class="dim">{_h(r["symptoms"][:80])}</td>'
-            f'<td class="dim">{_h(r["diagnosis"][:80])}</td>'
-            f'<td class="dim">{r["created_at"][:19].replace("T"," ")}</td></tr>'
-        )
-
-    return HTMLResponse(_FEEDBACK_PAGE.format(
-        total=len(rows), up=up, down=down, rows=rows_html,
-    ))
-
-
-def _h(text: str) -> str:
-    """Minimal HTML-escape for feedback viewer."""
-    return (text or "").replace("&", "&amp;").replace("<", "&lt;").replace(">", "&gt;").replace('"', "&quot;")
-
-
-_FEEDBACK_PAGE = """<!doctype html>
-<html lang="en"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>MedAI Feedback</title>
-<style>
-  body {{ background:#06101e; color:#c0d4ec; font-family:'DM Sans',system-ui,sans-serif; padding:40px 24px; }}
-  h1 {{ color:#e6f0ff; font-size:24px; margin-bottom:6px; }}
-  .stats {{ margin-bottom:24px; color:#4a9eff; font-size:15px; }}
-  table {{ width:100%; border-collapse:collapse; font-size:14px; }}
-  th {{ text-align:left; padding:10px 8px; border-bottom:1px solid rgba(255,255,255,0.1); color:#4a6280; font-weight:500; }}
-  td {{ padding:10px 8px; border-bottom:1px solid rgba(255,255,255,0.05); vertical-align:top; }}
-  .dim {{ color:#4a6280; font-size:13px; max-width:200px; overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }}
-  tr:hover td {{ background:rgba(255,255,255,0.03); }}
-  .empty {{ text-align:center; padding:60px 0; color:#4a6280; }}
-</style></head><body>
-<h1>MedAI Council Feedback</h1>
-<div class="stats">{total} responses &middot; {up} positive &middot; {down} negative</div>
-<table><thead><tr><th>#</th><th>Rating</th><th>Comment</th><th>Symptoms</th><th>Diagnosis</th><th>Time</th></tr></thead>
-<tbody>{rows}</tbody></table>
-</body></html>"""
+from helpers import (  # noqa: E402
+    cases_user_id as _cases_user_id,
+    json_object as _json_object,
+    utc_now as _utc_now,
+)
 
 
 # ─────────────────────────────────────────────────────────────────────────────
 #  Model selector catalog
 # ─────────────────────────────────────────────────────────────────────────────
 
-@app.get("/api/me")
-async def me(
-    request: Request,
-    user: Optional[AuthUser] = Depends(current_user_maybe_required),
-    debug: int = 0,
-    refresh: int = 0,
-):
-    """Return the resolved plan + basic profile for the current session.
-
-    Query params:
-      ?debug=1   — also return the raw JWT claims + admin-API result so you
-                   can see exactly what Clerk is sending.
-      ?refresh=1 — bust the Clerk admin-API plan cache for this user (useful
-                   immediately after subscribing so you don't have to wait
-                   up to 60s for the cache to expire).
-    """
-    from auth import (
-        _plan_from_claims,
-        _plan_from_clerk_api,
-        auth_configured,
-        effective_plan,
-        invalidate_plan_cache,
-    )
-
-    if refresh and user:
-        invalidate_plan_cache(user.user_id)
-
-    plan = effective_plan(user)
-    payload: dict[str, Any] = {
-        "user_id": user.user_id if user else None,
-        "email": user.email if user else None,
-        "plan": plan,
-    }
-
-    if debug:
-        # Decode the JWT without verifying — useful when CLERK_ISSUER is unset
-        # or verification fails, so you can still read iss / pla / fea.
-        import jwt as _jwt
-
-        token = (request.headers.get("authorization") or "").removeprefix("Bearer ").strip()
-        raw_claims: dict[str, Any] = {}
-        if token:
-            try:
-                raw_claims = _jwt.decode(token, options={"verify_signature": False})
-            except Exception as exc:
-                raw_claims = {"__decode_error__": str(exc)}
-
-        unverified_plan: str | None = None
-        if isinstance(raw_claims, dict) and "__decode_error__" not in raw_claims:
-            unverified_plan = _plan_from_claims(raw_claims)
-
-        dbg: dict[str, Any] = {
-            "jwt_plan_from_claims": user.plan if user else None,
-            "clerk_api_plan": _plan_from_clerk_api(user.user_id) if user else "free",
-            "raw_claims": raw_claims,
-            "clerk_jwt_verification_enabled": auth_configured(),
-            "plan_from_unverified_jwt_claims": unverified_plan,
-        }
-        if token and user is None and not auth_configured():
-            iss = raw_claims.get("iss") if isinstance(raw_claims, dict) else None
-            dbg["fix_hint"] = (
-                "FastAPI is not verifying Clerk JWTs (CLERK_ISSUER unset in apps/api/.env). "
-                "Every request is anonymous — resolved plan stays free even though the browser token has Pro claims. "
-                f"Set CLERK_ISSUER to your session JWT iss (e.g. {iss!r})."
-            )
-        payload["debug"] = dbg
-
-    return payload
-
-
-@app.get("/api/models")
-async def list_models(
-    user: Optional[AuthUser] = Depends(current_user_maybe_required),
-):
-    """Return the model allowlist visible to this user, with `locked` flags for
-    Pro-only entries when the caller is on the Free tier. The frontend dropdown
-    uses this to render the picker.
-    """
-    from auth import effective_plan
-
-    plan = effective_plan(user)
-    return {
-        "default": DEFAULT_MODEL_KEY,
-        "plan": plan,
-        "models": models_for_plan(plan),
-    }
+# /api/me and /api/models are registered via routers/meta.py.
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1684,13 +867,21 @@ async def patient_message(
     # second pass with the failure quoted back almost always succeeds. Other
     # subcodes (e.g. message_introduces_unknown_diagnosis) are harder to
     # self-correct, so they bubble straight to the global 422 handler.
+    #
+    # Note: the retry attempt CAN trip a different guardrail (e.g. the
+    # diagnosis-hallucination check under MESSAGE_HALLUCINATION_CHECK=1) — in
+    # that case the second-attempt 422 carries the new subcode, not
+    # "disclaimer_missing". Surfaced that way intentionally so callers see the
+    # actual failure mode.
     _DISCLAIMER_RETRY_HINT = (
         "\n\n---\n"
         "CRITICAL CORRECTION REQUIRED — your previous response was rejected by "
         "the output guardrail. The closing sentences MUST contain ALL of:\n"
         "  (1) a reference to this being an AI advisory system (or AI guidance),\n"
         "  (2) the words 'physician' / 'doctor' / 'clinician' / 'healthcare provider',\n"
-        "  (3) a verb like 'consult', 'see', 'speak', or 'talk to'.\n"
+        "  (3) one of:\n"
+        "      • a verb like 'consult', 'see', 'seek', 'speak', 'talk to', 'discuss', or 'follow up' with a clinician, OR\n"
+        "      • a phrase noting the AI is 'not a substitute / replacement / alternative' for clinical care.\n"
         "Re-write the entire patient message so the FINAL sentence(s) clearly "
         "satisfy all three. Do not add any prefatory note; produce the corrected "
         "message directly."
@@ -1731,21 +922,8 @@ async def patient_message(
                 context={"consensus": req.consensus},
             )
 
-    doctor_notify_status = "skipped"
-    if (req.doctor_email or "").strip() and is_urgent(req.consensus):
-        doctor_notify_status = await asyncio.to_thread(
-            notify_doctor_with_message,
-            doctor_email=req.doctor_email or "",
-            consensus=req.consensus,
-            plan_md=req.plan,
-            patient_message=message,
-            symptoms=req.symptoms,
-        )
-
     return {
         "message": message,
-        "doctor_notified": doctor_notify_status == "sent",
-        "doctor_notify_status": doctor_notify_status,
         "retried": retried,
         "retry_reason": retry_reason,
     }
@@ -1870,6 +1048,21 @@ async def save_consultation(
 
     con = _get_db()
     try:
+        # psycopg3 with autocommit=False opens an implicit transaction on the
+        # first execute; the SELECT, UPDATE, and INSERT below all run inside
+        # that single transaction and are committed together. A per-user
+        # advisory lock serialises the cap check + INSERT against parallel
+        # save_consultation calls from the same user — without it two
+        # simultaneous Free-tier saves can both pass the cap check and both
+        # INSERT, busting FREE_CONSULTATION_CAP. The lock auto-releases on
+        # commit/rollback (xact-scoped).
+        lock_key = int.from_bytes(
+            hashlib.sha256(user_id.encode("utf-8")).digest()[:8],
+            "big",
+            signed=True,
+        )
+        con.execute("SELECT pg_advisory_xact_lock(%s)", (lock_key,))
+
         case_row = con.execute(
             "SELECT state FROM cases WHERE id = %s AND user_id = %s",
             (req.case_id, user_id),
@@ -1950,6 +1143,14 @@ async def save_consultation(
             "created_at": now,
             "remaining": remaining,
         }
+    except Exception:
+        # Make the rollback explicit so failures surface in psycopg's logs.
+        # close() in the finally also rolls back, but explicit is clearer.
+        try:
+            con.rollback()
+        except Exception:
+            pass
+        raise
     finally:
         con.close()
 
@@ -2183,7 +1384,20 @@ def _attachment_block_for_case(
     user_id: str,
     question_texts: list[str] | None = None,
 ) -> str:
-    """Read attachments for a case and render as a prompt-safe text block."""
+    """Read attachments for a case and render as a prompt-safe text block.
+
+    Ownership is enforced at write time by `create_attachment` (the case is
+    verified to belong to the requesting user before save). The per-row
+    user_id filter below is the single read-time check — sufficient because
+    a row exists with `user_id != requesting_user` only if either save's
+    ownership check was skipped or somebody wrote rows out-of-band, both of
+    which fall back to "filter rejects all rows → empty block".
+
+    Previously this function also ran a `SELECT id FROM cases WHERE id=%s
+    AND user_id=%s` upfront. Dropped — that query duplicated the per-row
+    filter, added a round-trip per agent stage, and was the dominant cost
+    on Cloud Run cold starts (~5–10ms × stages).
+    """
     from attachments import format_attachment_block, get_attachment_store
 
     if not user_id:
@@ -2191,12 +1405,6 @@ def _attachment_block_for_case(
 
     con = _get_db()
     try:
-        case_row = con.execute(
-            "SELECT id FROM cases WHERE id = %s AND user_id = %s",
-            (case_id, user_id),
-        ).fetchone()
-        if case_row is None:
-            return ""
         rows = [
             row
             for row in get_attachment_store().list_for_case(con, case_id)

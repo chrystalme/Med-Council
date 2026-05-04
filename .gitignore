@@ -59,3 +59,10 @@ Thumbs.db
 # ─── TypeScript / testing ────────────────────────────────────────
 *.tsbuildinfo
 coverage/
+.coverage
+.coverage.*
+htmlcov/
+.playwright-mcp/
+
+# Design preview JPEGs live at the repo root and aren't shipped.
+/landing-*.jpeg

@@ -74,8 +74,15 @@ def _resolve_recipient(addr: str) -> str:
 
 def maybe_escalate_oncall(*, consensus: dict, symptoms: str) -> None:
     """
-    Fire-and-forget email via Resend when RESEND_API_KEY and ONCALL_DOCTOR_EMAIL are set
-    and consensus urgency looks high.
+    Fire-and-forget email via Resend when RESEND_API_KEY and ONCALL_DOCTOR_EMAIL
+    are set and consensus urgency looks high.
+
+    Recipient is ONCALL_DOCTOR_EMAIL by default but is passed through
+    `_resolve_recipient`, which honours EMAIL_OVERRIDE_TO. In dev/sandbox
+    envs that means the on-call inbox is shadowed and every escalation
+    lands wherever EMAIL_OVERRIDE_TO points — useful so dev workspaces
+    don't page real clinicians, but worth knowing if you're debugging
+    "why didn't the on-call get the email?" in a non-prod env.
     """
     key = os.environ.get("RESEND_API_KEY", "").strip()
     to = os.environ.get("ONCALL_DOCTOR_EMAIL", "").strip()
@@ -103,12 +110,12 @@ def maybe_escalate_oncall(*, consensus: dict, symptoms: str) -> None:
     subject = f"[MedAI Council] Escalation — {urg.upper()} urgency"
     dx = consensus.get("primaryDiagnosis") or consensus.get("primary_diagnosis") or "—"
     html = f"""
-    <p><strong>Urgency:</strong> {urg}</p>
-    <p><strong>Primary diagnosis (draft):</strong> {dx}</p>
+    <p><strong>Urgency:</strong> {_html.escape(str(urg))}</p>
+    <p><strong>Primary diagnosis (draft):</strong> {_html.escape(str(dx))}</p>
     <p><strong>Symptoms excerpt:</strong></p>
-    <pre style="white-space:pre-wrap;font-size:13px">{symptoms[:4000]}</pre>
+    <pre style="white-space:pre-wrap;font-size:13px">{_html.escape(str(symptoms)[:4000])}</pre>
     <p><strong>Full consensus JSON:</strong></p>
-    <pre style="white-space:pre-wrap;font-size:12px">{json.dumps(consensus, indent=2)[:12000]}</pre>
+    <pre style="white-space:pre-wrap;font-size:12px">{_html.escape(json.dumps(consensus, indent=2)[:12000])}</pre>
     """
 
     payload = json.dumps(
