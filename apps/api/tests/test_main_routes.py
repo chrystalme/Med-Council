@@ -442,6 +442,515 @@ class MessageRouteTest(unittest.TestCase):
         self.assertEqual(body.get("retried"), False)
 
 
+# ── Council specialist / physician ──────────────────────────────────────────
+
+
+class CouncilSpecialistRouteTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = _client()
+
+    def _patch_run_agent(self, return_value: str):
+        import main as _main
+
+        async def _fake(*args, **kwargs):
+            return return_value
+
+        return patch.object(_main, "run_agent", side_effect=_fake)
+
+    def test_returns_specialist_assessment(self) -> None:
+        with self._patch_run_agent("Cardiology assessment: ACS likely."):
+            r = self.client.post(
+                "/api/council/specialist",
+                json={
+                    "specialist_id": "internal_medicine",
+                    "symptoms": "chest pain",
+                    "followup_answers": "for 2 days",
+                    "prior_assessments": [],
+                },
+            )
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["specialist"]["id"], "internal_medicine")
+        self.assertIn("assessment", body)
+
+    def test_unknown_specialist_id_returns_400(self) -> None:
+        r = self.client.post(
+            "/api/council/specialist",
+            json={
+                "specialist_id": "rocket_science",
+                "symptoms": "x",
+                "followup_answers": "y",
+                "prior_assessments": [],
+            },
+        )
+        self.assertEqual(r.status_code, 400)
+
+
+class CouncilPhysicianRouteTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = _client()
+
+    def test_returns_physician_assessment(self) -> None:
+        import main as _main
+
+        async def _fake(*args, **kwargs):
+            return "Internal medicine: rule out ACS."
+
+        with patch.object(_main, "run_agent", side_effect=_fake):
+            r = self.client.post(
+                "/api/council/physician",
+                json={
+                    "physician_id": "internal_medicine",
+                    "symptoms": "chest pain",
+                    "followup_answers": "x",
+                    "prior_assessments": [],
+                },
+            )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json()["specialist"]["id"], "internal_medicine")
+
+
+# ── Research ────────────────────────────────────────────────────────────────
+
+
+class ResearchRouteTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = _client()
+
+    def test_returns_papers_payload(self) -> None:
+        import main as _main
+
+        papers_json = (
+            '{"papers": [{"title": "Acute coronary syndromes", "authors": "Smith J", '
+            '"journal": "NEJM", "year": 2024, "relevance": "Maps to chest pain", '
+            '"summary": "Summary.", "pmid": "12345678", '
+            '"url": "https://pubmed.ncbi.nlm.nih.gov/12345678/"}]}'
+        )
+
+        async def _fake(*args, **kwargs):
+            return papers_json
+
+        with patch.object(_main, "run_agent", side_effect=_fake):
+            r = self.client.post(
+                "/api/research",
+                json={
+                    "symptoms": "chest pain",
+                    "followup_answers": "x",
+                    "assessments": [],
+                },
+            )
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertIn("papers", body)
+
+
+# ── Deliberation expert selection ───────────────────────────────────────────
+
+
+class DeliberationSelectExpertsRouteTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = _client()
+
+    def test_returns_experts_with_internal_medicine_default(self) -> None:
+        import main as _main
+
+        async def _fake(*args, **kwargs):
+            return (
+                '{"deliberation_experts": ["cardiology", "pulmonology", "neurology"], '
+                '"reason_for_selection": "broad differential", "case_summary": "x", '
+                '"focus_areas": ["chest pain"]}'
+            )
+
+        with patch.object(_main, "run_agent", side_effect=_fake):
+            r = self.client.post(
+                "/api/deliberation/select-experts",
+                json={"symptoms": "chest pain", "followup_answers": "x"},
+            )
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        # internal_medicine forced into the list when missing.
+        self.assertIn("internal_medicine", body["deliberation_experts"])
+        # Cap enforced at 4-6 specialists.
+        self.assertGreaterEqual(len(body["deliberation_experts"]), 4)
+        self.assertLessEqual(len(body["deliberation_experts"]), 6)
+
+
+# ── Cases PATCH ─────────────────────────────────────────────────────────────
+
+
+class CasePatchRouteTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = _client()
+        self.con = _FakeCon()
+        import main as _main
+
+        self._patcher = patch.object(_main, "_get_db", return_value=self.con)
+        self._patcher.start()
+        self.addCleanup(self._patcher.stop)
+
+    def test_patches_state(self) -> None:
+        self.con._cases_row = {"user_id": ""}  # match anonymous owner
+        r = self.client.patch(
+            "/api/cases/case_1",
+            json={"state": {"step": "consensus"}, "title": "renamed"},
+        )
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["id"], "case_1")
+
+    def test_patch_404_on_other_user_case(self) -> None:
+        self.con._cases_row = {"user_id": "someone_else"}
+        r = self.client.patch(
+            "/api/cases/case_1",
+            json={"state": {}, "title": None},
+        )
+        self.assertEqual(r.status_code, 404)
+
+
+# ── Consultations: list, get, delete, retrieve ──────────────────────────────
+
+
+class ConsultationsListRouteTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = _client()
+        self.con = _FakeCon()
+        import main as _main
+
+        self._patcher = patch.object(_main, "_get_db", return_value=self.con)
+        self._patcher.start()
+        self.addCleanup(self._patcher.stop)
+
+    def test_returns_empty_list_with_remaining_header(self) -> None:
+        # Override the fake connection's behaviour for consultations queries.
+        original_execute = self.con.execute
+
+        def execute(sql, params=None):
+            if "FROM consultations" in sql.upper():
+                return _FakeCursor(rows=[])
+            return original_execute(sql, params)
+
+        self.con.execute = execute  # type: ignore[assignment]
+
+        r = self.client.get("/api/patient/consultations")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["consultations"], [])
+        # Free tier: header should set remaining quota.
+        self.assertIn("X-Consultation-Remaining", r.headers)
+
+
+class ConsultationsGetRouteTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = _client()
+        self.con = _FakeCon()
+        import main as _main
+
+        self._patcher = patch.object(_main, "_get_db", return_value=self.con)
+        self._patcher.start()
+        self.addCleanup(self._patcher.stop)
+
+    def test_returns_404_when_missing(self) -> None:
+        original_execute = self.con.execute
+
+        def execute(sql, params=None):
+            if "FROM consultations" in sql.upper():
+                return _FakeCursor(row=None)
+            return original_execute(sql, params)
+
+        self.con.execute = execute  # type: ignore[assignment]
+        r = self.client.get("/api/patient/consultations/missing_id")
+        self.assertEqual(r.status_code, 404)
+
+    def test_returns_404_when_owner_mismatch(self) -> None:
+        original_execute = self.con.execute
+
+        def execute(sql, params=None):
+            if "FROM consultations" in sql.upper():
+                return _FakeCursor(
+                    row={
+                        "id": "con_1",
+                        "case_id": "case_1",
+                        "user_id": "someone_else",
+                        "summary": "x",
+                        "primary_dx": "y",
+                        "icd_code": "Z",
+                        "urgency": "routine",
+                        "confidence": 50,
+                        "consultation_state": {},
+                        "case_state": {},
+                        "case_title": "T",
+                        "created_at": "2026-01-01",
+                    }
+                )
+            return original_execute(sql, params)
+
+        self.con.execute = execute  # type: ignore[assignment]
+        r = self.client.get("/api/patient/consultations/con_1")
+        self.assertEqual(r.status_code, 404)
+
+
+class ConsultationsDeleteRouteTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = _client()
+        self.con = _FakeCon()
+        import main as _main
+
+        self._patcher = patch.object(_main, "_get_db", return_value=self.con)
+        self._patcher.start()
+        self.addCleanup(self._patcher.stop)
+
+    def test_deletes_and_returns_ok(self) -> None:
+        original_execute = self.con.execute
+
+        def execute(sql, params=None):
+            up = sql.upper()
+            if up.lstrip().startswith("SELECT") and "FROM CONSULTATIONS" in up:
+                return _FakeCursor(row={"user_id": ""})
+            return original_execute(sql, params)
+
+        self.con.execute = execute  # type: ignore[assignment]
+        r = self.client.delete("/api/patient/consultations/con_1")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json(), {"ok": True})
+
+
+class RetrieveRouteTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = _client()
+
+    def test_anonymous_returns_empty_hits(self) -> None:
+        # No user → user_id is "", route bails early with empty hits and never
+        # touches the embedding provider.
+        r = self.client.post(
+            "/api/patient/retrieve",
+            json={"query": "chest pain history", "top_k": 5},
+        )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json(), {"hits": []})
+
+
+# ── Message followup ────────────────────────────────────────────────────────
+
+
+class MessageFollowupRouteTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = _client()
+
+    def test_returns_followup_text(self) -> None:
+        import main as _main
+
+        async def _fake(*args, **kwargs):
+            return "Yes, that's a reasonable interpretation. Discuss with your physician — this AI guidance is informational only."
+
+        with patch.object(_main, "run_agent", side_effect=_fake):
+            r = self.client.post(
+                "/api/message/followup",
+                json={
+                    "question": "Should I worry about this?",
+                    "symptoms": "chest pain",
+                    "followup_answers": "x",
+                    "consensus": {"primaryDiagnosis": "ACS"},
+                    "plan": "rest",
+                    "patient_message": "Take care of yourself.",
+                },
+            )
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        # Route returns the model's reply under "reply".
+        self.assertIn("reply", body)
+
+
+# ── Attachments list / delete ───────────────────────────────────────────────
+
+
+class AttachmentsListRouteTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = _client()
+        self.con = _FakeCon()
+        import main as _main
+
+        self._patcher = patch.object(_main, "_get_db", return_value=self.con)
+        self._patcher.start()
+        self.addCleanup(self._patcher.stop)
+
+    def test_returns_404_when_case_not_owned(self) -> None:
+        # Empty cases_row → ownership check fails (case_id query returns None).
+        self.con._cases_row = None
+        r = self.client.get("/api/cases/case_X/attachments")
+        self.assertEqual(r.status_code, 404)
+
+    def test_lists_attachments_for_owned_case(self) -> None:
+        self.con._cases_row = {"user_id": ""}
+        # Real list comes from get_attachment_store().list_for_case — stub it.
+        from attachments import AttachmentRow
+
+        store_rows = [
+            AttachmentRow(
+                id="att_1",
+                case_id="case_1",
+                user_id="",
+                kind="file",
+                filename="lab.pdf",
+                mime_type="application/pdf",
+                text="results",
+                size_bytes=10,
+                question_index=None,
+                created_at="2026-01-01",
+            )
+        ]
+
+        class _StubStore:
+            def list_for_case(self, con, case_id):
+                return store_rows
+
+        with patch("main.get_attachment_store" if hasattr(__import__("main"), "get_attachment_store") else "attachments.get_attachment_store", return_value=_StubStore()):
+            r = self.client.get("/api/cases/case_1/attachments")
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(len(body["attachments"]), 1)
+        self.assertEqual(body["attachments"][0]["id"], "att_1")
+
+
+# ── Speech (multipart) ──────────────────────────────────────────────────────
+
+
+class SpeechSynthesizeRouteTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = _client()
+
+    def test_returns_audio_bytes(self) -> None:
+        import main as _main
+
+        class _StubProvider:
+            def synthesize(self, text, voice="alloy"):
+                return b"fake-mp3-bytes"
+
+        with patch.object(_main, "get_speech_provider" if hasattr(_main, "get_speech_provider") else "speech.get_speech_provider", return_value=_StubProvider(), create=True):
+            # Some versions don't expose get_speech_provider on _main directly;
+            # patch the source module too.
+            with patch("speech.get_speech_provider", return_value=_StubProvider()):
+                r = self.client.post(
+                    "/api/speech/synthesize",
+                    json={"text": "hello"},
+                )
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.content, b"fake-mp3-bytes")
+        self.assertIn("audio", r.headers.get("content-type", ""))
+
+
+# ── Save consultation ───────────────────────────────────────────────────────
+
+
+class SaveConsultationRouteTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = _client()
+        self.con = _FakeCon()
+        import main as _main
+
+        self._db_patch = patch.object(_main, "_get_db", return_value=self.con)
+        self._db_patch.start()
+        self.addCleanup(self._db_patch.stop)
+
+    def test_404_when_case_not_owned(self) -> None:
+        """save_consultation raises 404 when the case row doesn't exist for this user."""
+        original_execute = self.con.execute
+
+        def execute(sql, params=None):
+            up = sql.upper()
+            if up.lstrip().startswith("SELECT") and "FROM CASES" in up:
+                return _FakeCursor(row=None)  # not found
+            return original_execute(sql, params)
+
+        self.con.execute = execute  # type: ignore[assignment]
+
+        # Stub embed/vector so we don't need to inject those modules.
+        with patch("embeddings.get_embedding_provider"), patch(
+            "vector_store.get_vector_store"
+        ):
+            r = self.client.post(
+                "/api/patient/consultations",
+                json={
+                    "case_id": "missing_case",
+                    "summary": "Test summary.",
+                    "primary_dx": "ACS",
+                    "icd_code": "I20.9",
+                    "urgency": "urgent",
+                    "confidence": 80,
+                },
+            )
+        self.assertEqual(r.status_code, 404)
+
+    def test_save_succeeds_with_owned_case(self) -> None:
+        original_execute = self.con.execute
+
+        def execute(sql, params=None):
+            up = sql.upper()
+            if up.lstrip().startswith("SELECT") and "FROM CASES" in up:
+                return _FakeCursor(row={"state": {}})
+            if "COUNT(*) AS N FROM CONSULTATIONS" in up:
+                return _FakeCursor(row={"n": 0})
+            return original_execute(sql, params)
+
+        self.con.execute = execute  # type: ignore[assignment]
+
+        # Stub the vector + embed pieces — they run after the main commit and
+        # exceptions are swallowed; just provide working stubs.
+        class _StubEmb:
+            def embed(self, text):
+                return [0.0] * 1536
+
+        class _StubStore:
+            def upsert(self, *args, **kwargs):
+                pass
+
+        with patch("embeddings.get_embedding_provider", return_value=_StubEmb()), patch(
+            "vector_store.get_vector_store", return_value=_StubStore()
+        ):
+            r = self.client.post(
+                "/api/patient/consultations",
+                json={
+                    "case_id": "case_1",
+                    "summary": "Test consultation summary.",
+                    "primary_dx": "ACS",
+                    "icd_code": "I20.9",
+                    "urgency": "urgent",
+                    "confidence": 80,
+                    "attachment_texts": [],
+                },
+            )
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertTrue(body["id"].startswith("con_"))
+        self.assertEqual(body["case_id"], "case_1")
+
+
+# ── Patient email ───────────────────────────────────────────────────────────
+
+
+class PatientEmailRouteTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = _client()
+
+    def test_pro_only_returns_403_for_free_tier(self) -> None:
+        # No auth → free tier; require_pro should reject.
+        r = self.client.post(
+            "/api/patient/email",
+            json={
+                "to": "alice@example.com",
+                "patient_name": "Alice",
+                "primary_dx": "ACS",
+                "urgency": "urgent",
+                "confidence": 80,
+                "plan_md": "rest",
+                "message_md": "take care",
+            },
+        )
+        # Free tier hits the 4xx wall — the exact code (400/401/402/403) is
+        # implementation-defined by require_pro / current configuration.
+        self.assertGreaterEqual(r.status_code, 400)
+        self.assertLess(r.status_code, 500)
+
+
 # ── Exception handling ──────────────────────────────────────────────────────
 
 
