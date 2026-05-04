@@ -22,14 +22,13 @@ import hashlib
 import json
 import logging
 import os
-import re
 import secrets
 import uuid
 
 log = logging.getLogger("medai.api")
 from datetime import datetime, timezone
 from pathlib import Path
-from contextlib import asynccontextmanager, contextmanager
+from contextlib import asynccontextmanager
 from typing import Annotated, Any, Optional
 from dotenv import load_dotenv
 
@@ -52,7 +51,6 @@ from escalation import (
 from rate_limit import enforce_rate_limit, rate_limit_enabled
 
 from agents import (
-    Agent,
     InputGuardrailTripwireTriggered,
     OutputGuardrailTripwireTriggered,
     set_default_openai_api,
@@ -60,19 +58,26 @@ from agents import (
     set_tracing_export_api_key,
 )
 from agents.models.multi_provider import MultiProvider
-from agents.run import Runner
-from agents.run_config import RunConfig
-from agents.tracing import custom_span, trace as workflow_trace
-from agents.tracing.setup import get_trace_provider
+from agents.tracing import custom_span
 
 from council_schemas import (
-    IntakeFollowupOut,
     PatientSymptomsIn,
-    parse_intake_followup_text,
     parse_research_papers,
 )
 from consultation_memory import build_consultation_memory_text
-from langfuse_tracing import configure_langfuse, flush_langfuse, langfuse_attributes
+from langfuse_tracing import configure_langfuse
+
+from agent_runtime import (
+    _DirectOpenAICompatibleProvider,
+    _truncate,
+    format_intake_questions_for_api as _format_intake_questions_for_api,
+    parse_json,
+    resolve_for_request as _resolve_for_request,
+    run_agent,
+    run_agent_raw,  # re-exported so tests/output_guardrails.py can patch main.run_agent_raw
+    set_providers as _set_runtime_providers,
+    traced_workflow,
+)
 
 from council import (
     ALL_SPECIALIST_IDS,
@@ -89,41 +94,7 @@ from council import (
     research_agent,
     triage_agent,
 )
-from council_registry import DEFAULT_MODEL_KEY, models_for_plan, resolve_model
-
-# Two model providers wired side-by-side:
-#   • `_vertex_model_provider`  — Vertex AI (default; all in-house models)
-#   • `_council_model_provider` — OpenRouter (only `openai/gpt-5` today)
-# Registry slugs prefixed with `vertex:` route to the Vertex client.
-_council_model_provider: MultiProvider | None = None
-# MultiProvider interprets `openai/…` / `anthropic/…` prefixes as routing hints
-# and strips them, which breaks OpenAI-compatible endpoints that expect the
-# full slug intact (Vertex AI's OpenAI-compat endpoint, Groq, Together, …).
-# The passthrough provider below keeps the slug verbatim.
-_vertex_model_provider = None  # type: ignore[var-annotated]
-
-_VERTEX_ROUTING_PREFIX = "vertex:"
-
-
-class _DirectOpenAICompatibleProvider:
-    """Minimal ModelProvider that sends the slug to the client verbatim.
-
-    MultiProvider tries to be clever about `openai/…` / `anthropic/…` slugs,
-    which breaks OpenAI-compatible endpoints (Groq, Together, …) that expect
-    the full slug intact. This provider always instantiates
-    `OpenAIChatCompletionsModel(model=slug, openai_client=client)` — no parsing.
-    """
-
-    def __init__(self, client, *, default_model: str):
-        from agents.models.openai_chatcompletions import OpenAIChatCompletionsModel
-
-        self._client = client
-        self._default_model = default_model
-        self._ModelClass = OpenAIChatCompletionsModel
-
-    def get_model(self, model_name):
-        name = model_name or self._default_model
-        return self._ModelClass(model=name, openai_client=self._client)
+from council_registry import DEFAULT_MODEL_KEY, models_for_plan
 
 # ── Persistence (Postgres via db.py; schema owned by Alembic) ────────────────
 import db as _db
@@ -158,12 +129,6 @@ def _get_db():
     return _db.connect()
 
 
-def _truncate(text: str, max_len: int = 120) -> str:
-    """Truncate text for trace metadata (keeps traces searchable without bloating)."""
-    t = (text or "").strip()
-    return t[:max_len] + "…" if len(t) > max_len else t
-
-
 def _json_object(raw: Any) -> dict[str, Any]:
     if isinstance(raw, dict):
         return raw
@@ -174,61 +139,6 @@ def _json_object(raw: Any) -> dict[str, Any]:
             return {}
         return parsed if isinstance(parsed, dict) else {}
     return {}
-
-
-def _flush_sdk_traces() -> None:
-    """Push queued traces immediately (BatchTraceProcessor defaults to ~5s delay)."""
-    try:
-        get_trace_provider().force_flush()
-    except Exception:
-        pass
-    flush_langfuse()
-
-
-def _coerce_trace_metadata(metadata: dict | None) -> dict[str, str]:
-    """Normalise trace metadata values to strings.
-
-    The OpenAI tracing ingestion endpoint requires every metadata value to be a
-    string. Different providers/models can leak non-string values (ints, bools,
-    None) through call sites. Coerce here so every call site is compatible.
-    """
-    if not metadata:
-        return {}
-    out: dict[str, str] = {}
-    for k, v in metadata.items():
-        if v is None:
-            continue
-        if isinstance(v, bool):
-            out[str(k)] = "true" if v else "false"
-        elif isinstance(v, (str, int, float)):
-            out[str(k)] = str(v)
-        else:
-            try:
-                out[str(k)] = json.dumps(v, default=str, ensure_ascii=False)
-            except Exception:
-                out[str(k)] = str(v)
-    return out
-
-
-@contextmanager
-def traced_workflow(name: str, *, group_id: str | None = None, metadata: dict | None = None):
-    """OpenAI Agents SDK workflow trace + immediate export flush for the dashboard.
-
-    Args:
-        name: Workflow name shown in the trace dashboard.
-        group_id: Optional session/conversation ID to link related traces.
-        metadata: Arbitrary key-value pairs attached to the trace for filtering/search.
-            All values are coerced to strings (tracing ingestion requires string values).
-    """
-    trace_metadata = _coerce_trace_metadata(metadata)
-    with langfuse_attributes(
-        session_id=group_id,
-        metadata=trace_metadata,
-        tags=[trace_metadata["stage"]] if "stage" in trace_metadata else None,
-    ):
-        with workflow_trace(name, group_id=group_id, metadata=trace_metadata):
-            yield
-    _flush_sdk_traces()
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -246,8 +156,6 @@ async def lifespan(app: FastAPI):
     if not openai_key:
         raise RuntimeError("OPENAI_API_KEY is not set (used for tracing only).")
 
-    global _council_model_provider, _vertex_model_provider
-
     # Point the OpenAI Agents SDK default OpenAI client at OpenRouter (chat completions).
     openrouter_client = AsyncOpenAI(
         api_key=openrouter_key,
@@ -262,10 +170,11 @@ async def lifespan(app: FastAPI):
     set_tracing_export_api_key(openai_key)
     langfuse_enabled = configure_langfuse()
 
-    _council_model_provider = MultiProvider(
+    council_provider = MultiProvider(
         openai_client=openrouter_client,
         unknown_prefix_mode="model_id",
     )
+    vertex_provider: _DirectOpenAICompatibleProvider | None = None
 
     # Vertex AI: serves every in-house model — the free-tier default
     # (gemini-2.5-flash-lite) and the Pro-tier Gemini / Claude / Llama entries.
@@ -308,7 +217,7 @@ async def lifespan(app: FastAPI):
                 base_url=vertex_base,
                 http_client=vertex_http,
             )
-            _vertex_model_provider = _DirectOpenAICompatibleProvider(
+            vertex_provider = _DirectOpenAICompatibleProvider(
                 vertex_client, default_model="google/gemini-2.5-flash-lite"
             )
         except Exception as exc:
@@ -324,9 +233,10 @@ async def lifespan(app: FastAPI):
             "Vertex AI calls will return provider_unavailable. Set it on the container."
         )
 
+    _set_runtime_providers(council=council_provider, vertex=vertex_provider)
     _run_migrations()
 
-    default_label = f"vertex:{_vertex_model_provider._default_model}" if _vertex_model_provider else "none"
+    default_label = f"vertex:{vertex_provider._default_model}" if vertex_provider else "none"
     print(f"✓ Inference  → Vertex AI  ({default_label}) + OpenRouter (gpt-5 only)")
     tracing_targets = "platform.openai.com/traces + Langfuse" if langfuse_enabled else "platform.openai.com/traces"
     print(f"✓ Tracing    → {tracing_targets}")
@@ -448,254 +358,8 @@ async def _rate_limit_middleware(request: Request, call_next):
     return await call_next(request)
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Helpers
-# ─────────────────────────────────────────────────────────────────────────────
-
-_TRANSIENT_PROVIDER_MARKERS = (
-    "524",                 # Cloudflare origin timeout (common on free OpenRouter models)
-    "502",                 # Bad gateway
-    "503",                 # Service unavailable
-    "504",                 # Gateway timeout
-    "provider returned error",
-    "no choices",
-    "upstream",
-    "timeout",
-    "timed out",
-    "rate limit",
-    "overloaded",
-    "try again",
-)
-
-
-def _is_transient_provider_error(exc: BaseException) -> bool:
-    """Detect OpenRouter/provider hiccups that are worth retrying."""
-    msg = (str(exc) or "").lower()
-    if any(marker in msg for marker in _TRANSIENT_PROVIDER_MARKERS):
-        return True
-    status = getattr(exc, "status_code", None) or getattr(exc, "http_status", None)
-    return status in {502, 503, 504, 524, 429}
-
-
-def _is_bad_model_error(exc: BaseException) -> bool:
-    """HTTP 400 from the provider about the model id — retrying won't help.
-
-    Matches OpenRouter's "not a valid model ID" and OpenAI/Groq's equivalents
-    so the caller can surface a structured "pick another model" prompt.
-    """
-    msg = str(exc).lower()
-    if "not a valid model" in msg or "model not found" in msg or "invalid model" in msg:
-        return True
-    if "unknown model" in msg:
-        return True
-    status = getattr(exc, "status_code", None) or getattr(exc, "http_status", None)
-    if status == 400 and "model" in msg:
-        return True
-    return False
-
-
-def _resolve_runtime_model(agent: Agent, model: str | None):
-    """Pick the provider + concrete model for this run.
-
-    The `groq:` routing prefix on a slug steers the call to the Groq client.
-    Everything else stays on OpenRouter. Falls through to the agent's bound
-    model if no per-run override is supplied.
-
-    For the Groq path we construct an `OpenAIChatCompletionsModel` instance
-    here and return it as the `model` value for RunConfig. This bypasses the
-    SDK's provider-lookup path — which we observed does NOT always respect
-    `RunConfig.model_provider` when the agent's own `.model` string has an
-    unknown prefix, causing the raw `groq:…` slug to leak into OpenRouter.
-    RunConfig accepts a concrete Model instance and uses it directly.
-    """
-    effective = model if model else getattr(agent, "model", None)
-    if isinstance(effective, str) and effective.startswith(_VERTEX_ROUTING_PREFIX):
-        clean = effective[len(_VERTEX_ROUTING_PREFIX):]
-        if _vertex_model_provider is None:
-            raise HTTPException(
-                status_code=503,
-                detail={
-                    "code": "vertex_not_configured",
-                    "message": (
-                        "Vertex AI is not wired on this container. Ensure VERTEX_PROJECT "
-                        "is set and the runtime service account has roles/aiplatform.user, "
-                        "then restart. See terraform/main.tf for the IAM binding."
-                    ),
-                },
-            )
-        # Return a pre-bound Model instance — Runner uses it without any further
-        # provider routing, so the `vertex:` slug never leaks to another client.
-        model_instance = _vertex_model_provider.get_model(clean)
-        return _vertex_model_provider, model_instance
-    return _council_model_provider or MultiProvider(), effective if isinstance(effective, str) else None
-
-
-async def run_agent_raw(
-    agent: Agent,
-    prompt: str,
-    *,
-    model: str | None = None,
-    context: Any = None,
-) -> Any:
-    """Run an agent and return `final_output`.
-
-    Routes between Vertex (in-house) and OpenRouter (GPT-5 only) based on the
-    slug's `vertex:` prefix, then wraps the Runner in a retry loop for
-    transient provider errors — Cloudflare 524 origin timeouts, empty-choices
-    responses, 5xx upstream failures, and rate-limit backpressure.
-    """
-    provider, clean_model = _resolve_runtime_model(agent, model)
-
-    # IMPORTANT: we observed that openai-agents' Runner ignores
-    # RunConfig.model_provider / RunConfig.model when the Agent's own `.model`
-    # field is a string — it falls back to the global `set_default_openai_client`
-    # (OpenRouter) and sends the raw string slug, leaking our `vertex:…`
-    # prefix to OpenRouter which 400s.
-    #
-    # Fix: clone the agent with the pre-bound Model instance so `agent.model`
-    # IS the Model itself. The Runner then uses it directly — no provider
-    # lookup, no global-client fallback, no slug to leak. The clone is cheap
-    # and keeps the shared agent registry in council.py immutable per-request.
-    # openai-agents v0.14 resolves `agent.model` to a string first and then
-    # routes via the global default client, so a plain `RunConfig.model_provider`
-    # override isn't honored. Cloning the agent with the pre-bound Model
-    # instance forces Runner's `get_model()` down the `isinstance(agent.model,
-    # Model)` branch — no string, no provider lookup, no fallback to the
-    # global OpenRouter client. Falls back to the original agent if clone
-    # fails so we never crash on this transformation alone.
-    run_agent = agent
-    if clean_model is not None and not isinstance(clean_model, str):
-        try:
-            run_agent = agent.clone(model=clean_model)
-        except Exception:
-            run_agent = agent
-
-    rc = RunConfig(
-        model_provider=provider,
-        model=clean_model,  # belt-and-braces; the clone above is the real fix
-        trace_include_sensitive_data=True,
-    )
-
-    max_attempts = 3
-    last_exc: BaseException | None = None
-    for attempt in range(1, max_attempts + 1):
-        try:
-            result = await Runner.run(run_agent, prompt, run_config=rc, context=context)
-            return result.final_output
-        except Exception as exc:
-            last_exc = exc
-            if _is_bad_model_error(exc):
-                # Non-retryable: the model id is wrong or the provider doesn't
-                # know it. Bail out early so the caller gets a structured 400
-                # instead of three pointless retries.
-                break
-            if not _is_transient_provider_error(exc) or attempt == max_attempts:
-                break
-            delay = 1.5 * (2 ** (attempt - 1))  # 1.5s → 3s → 6s
-            log.warning(
-                "Transient provider error on attempt %d/%d (%s); retrying in %.1fs",
-                attempt, max_attempts, exc, delay,
-            )
-            await asyncio.sleep(delay)
-
-    # All retries exhausted (or we bailed early on a non-retryable error).
-    assert last_exc is not None
-    if _is_bad_model_error(last_exc):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "bad_model",
-                "message": (
-                    "The selected model was rejected by the provider. Pick a "
-                    "different model from the selector and try again."
-                ),
-                "provider_message": str(last_exc)[:500],
-            },
-        ) from last_exc
-    if _is_transient_provider_error(last_exc):
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "code": "provider_unavailable",
-                "message": (
-                    "The model provider is temporarily unavailable "
-                    f"({type(last_exc).__name__}). This usually clears in a few seconds "
-                    "— try again, or switch to a different model."
-                ),
-            },
-        ) from last_exc
-    raise last_exc
-
-
-async def run_agent(
-    agent: Agent,
-    prompt: str,
-    *,
-    model: str | None = None,
-    context: Any = None,
-) -> str:
-    """Run an agent and return its final output as a string."""
-    output = await run_agent_raw(agent, prompt, model=model, context=context)
-    if isinstance(output, str):
-        return output
-    return output.model_dump_json() if hasattr(output, "model_dump_json") else str(output)
-
-
-def _resolve_for_request(
-    req: BaseModel,
-    user: "AuthUser | None",
-    response: "Response",
-) -> str:
-    """Resolve the OpenRouter slug for this request, set downgrade headers, return the slug.
-
-    Every pipeline endpoint calls this to look up the user's choice of model
-    from the allowlist, enforce the free/pro tier split silently, and pass the
-    slug into run_agent(...). `req.model` is an allowlist key (e.g.
-    "claude-opus-4-7"); the returned value is the OpenRouter slug.
-    """
-    from auth import effective_plan  # local import to avoid circular at module load
-
-    requested = getattr(req, "model", None)
-    plan = effective_plan(user)
-    slug, downgraded = resolve_model(requested, plan)
-    if downgraded:
-        response.headers["X-Model-Downgraded"] = "1"
-        response.headers["X-Model-Downgrade-Reason"] = "plan_required"
-    return slug
-
-
-def _format_intake_questions_for_api(out: Any) -> str:
-    """Parse model output into IntakeFollowupOut, then numbered lines for the UI."""
-    if isinstance(out, IntakeFollowupOut):
-        model = out
-    else:
-        model = parse_intake_followup_text(out if isinstance(out, str) else str(out))
-    return "\n".join(f"{i + 1}. {q.strip()}" for i, q in enumerate(model.questions))
-
-
-def parse_json(raw: str) -> dict | list:
-    """
-    Robustly extract JSON from model output.
-    Handles: markdown fences, leading prose, trailing text.
-    """
-    # Strip ```json ... ``` fences
-    clean = re.sub(r"```(?:json)?\s*", "", raw).replace("```", "").strip()
-
-    # Direct parse
-    try:
-        return json.loads(clean)
-    except json.JSONDecodeError:
-        pass
-
-    # Find first {...} or [...]
-    match = re.search(r"(\{[\s\S]*\}|\[[\s\S]*\])", clean)
-    if match:
-        try:
-            return json.loads(match.group(1))
-        except json.JSONDecodeError:
-            pass
-
-    raise ValueError(f"No valid JSON found in model output. Raw (first 400 chars):\n{raw[:400]}")
+# Runtime helpers (run_agent, run_agent_raw, traced_workflow, parse_json, …)
+# now live in agent_runtime.py and are imported at the top of this file.
 
 
 from external.pubmed import search_papers as _pubmed_search_papers
