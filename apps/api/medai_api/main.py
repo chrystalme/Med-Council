@@ -42,13 +42,13 @@ from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 from openai import AsyncOpenAI
 from pydantic import BaseModel, Field, field_validator
 
-from auth import AuthUser, auth_configured, current_user_maybe_required, require_pro
-from escalation import (
+from .auth import AuthUser, auth_configured, current_user_maybe_required, require_pro
+from .escalation import (
     ResendNotConfiguredError,
     maybe_escalate_oncall,
     send_patient_email,
 )
-from rate_limit import enforce_rate_limit, rate_limit_enabled
+from .rate_limit import enforce_rate_limit, rate_limit_enabled
 
 from agents import (
     InputGuardrailTripwireTriggered,
@@ -60,14 +60,14 @@ from agents import (
 from agents.models.multi_provider import MultiProvider
 from agents.tracing import custom_span
 
-from council_schemas import (
+from .council_schemas import (
     PatientSymptomsIn,
     parse_research_papers,
 )
-from consultation_memory import build_consultation_memory_text
-from langfuse_tracing import configure_langfuse
+from .consultation_memory import build_consultation_memory_text
+from .langfuse_tracing import configure_langfuse
 
-from agent_runtime import (
+from .agent_runtime import (
     _DirectOpenAICompatibleProvider,
     _truncate,
     format_intake_questions_for_api as _format_intake_questions_for_api,
@@ -79,7 +79,7 @@ from agent_runtime import (
     traced_workflow,
 )
 
-from council import (
+from .council import (
     ALL_SPECIALIST_IDS,
     MODEL,
     SPECIALIST_AGENTS,
@@ -93,15 +93,14 @@ from council import (
     research_agent,
     triage_agent,
 )
-from council_registry import DEFAULT_MODEL_KEY, models_for_plan
+from .council_registry import DEFAULT_MODEL_KEY, models_for_plan
 
 # ── Persistence (Postgres via db.py; schema owned by Alembic) ────────────────
-import db as _db
-
+from . import db as _db
 # FEEDBACK_SECRET lives in routers/feedback.py. Re-exported here for the
 # startup-banner print below; if you change one, change the other or move
 # both behind a shared module.
-from routers.feedback import FEEDBACK_SECRET  # noqa: E402
+from .routers.feedback import FEEDBACK_SECRET  # noqa: E402
 
 
 def _run_migrations() -> None:
@@ -277,19 +276,19 @@ app.add_middleware(
 
 
 # ── Routers (extracted from main.py) ────────────────────────────────────────
-from routers import attachments as _attachments_router  # noqa: E402
-from routers import cases as _cases_router  # noqa: E402
-from routers import consensus_plan as _consensus_plan_router  # noqa: E402
-from routers import consultations as _consultations_router  # noqa: E402
-from routers import council as _council_router  # noqa: E402
-from routers import email as _email_router  # noqa: E402
-from routers import feedback as _feedback_router  # noqa: E402
-from routers import intake as _intake_router  # noqa: E402
-from routers import message as _message_router  # noqa: E402
-from routers import meta as _meta_router  # noqa: E402
-from routers import research as _research_router  # noqa: E402
-from routers import speech as _speech_router  # noqa: E402
-from routers import triage as _triage_router  # noqa: E402
+from .routers import attachments as _attachments_router  # noqa: E402
+from .routers import cases as _cases_router  # noqa: E402
+from .routers import consensus_plan as _consensus_plan_router  # noqa: E402
+from .routers import consultations as _consultations_router  # noqa: E402
+from .routers import council as _council_router  # noqa: E402
+from .routers import email as _email_router  # noqa: E402
+from .routers import feedback as _feedback_router  # noqa: E402
+from .routers import intake as _intake_router  # noqa: E402
+from .routers import message as _message_router  # noqa: E402
+from .routers import meta as _meta_router  # noqa: E402
+from .routers import research as _research_router  # noqa: E402
+from .routers import speech as _speech_router  # noqa: E402
+from .routers import triage as _triage_router  # noqa: E402
 
 app.include_router(_meta_router.router)
 app.include_router(_feedback_router.router)
@@ -385,7 +384,7 @@ async def _rate_limit_middleware(request: Request, call_next):
 # now live in agent_runtime.py and are imported at the top of this file.
 
 
-from external.pubmed import search_papers as _pubmed_search_papers
+from .external.pubmed import search_papers as _pubmed_search_papers
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -395,7 +394,7 @@ from external.pubmed import search_papers as _pubmed_search_papers
 SymptomsIn = PatientSymptomsIn
 
 
-from schemas import (
+from .schemas import (
     ConsensusIn,
     MessageIn,
     PatientFollowUpIn,
@@ -422,7 +421,7 @@ from schemas import (
 # re-aliases them below for the routes still here (consultations, attachments,
 # etc.). Drop the aliases when those routes move.
 
-from helpers import (  # noqa: E402
+from .helpers import (  # noqa: E402
     cases_user_id as _cases_user_id,
     json_object as _json_object,
     utc_now as _utc_now,
@@ -473,7 +472,7 @@ from helpers import (  # noqa: E402
 
 
 # _retrieve_patient_context moved to case_context.py; aliased below.
-from case_context import retrieve_patient_context as _retrieve_patient_context  # noqa: E402
+from .case_context import retrieve_patient_context as _retrieve_patient_context  # noqa: E402
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -482,7 +481,7 @@ from case_context import retrieve_patient_context as _retrieve_patient_context  
 
 
 # _attachment_block_for_case moved to case_context.py; aliased below.
-from case_context import attachment_block_for_case as _attachment_block_for_case  # noqa: E402
+from .case_context import attachment_block_for_case as _attachment_block_for_case  # noqa: E402
 
 
 # Attachment routes (/api/cases/{id}/attachments*) live in routers/attachments.py.

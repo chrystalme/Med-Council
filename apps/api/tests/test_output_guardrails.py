@@ -21,7 +21,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from agents import GuardrailFunctionOutput  # noqa: E402
 
-import output_guardrails as g  # noqa: E402
+from medai_api import output_guardrails as g  # noqa: E402
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -347,7 +347,7 @@ class ToxicityGuardrailTest(unittest.TestCase):
             return classifier_response
 
         # Make sure the lazy import inside the guardrail picks up our stub.
-        import main as _main
+        from medai_api import main as _main
 
         with patch.object(_main, "run_agent_raw", side_effect=_fake_run_agent_raw):
             return _run(g._check_toxicity(_StubCtx(), _StubAgent(), output))
@@ -373,7 +373,7 @@ class ToxicityGuardrailTest(unittest.TestCase):
         async def _boom(*args, **kwargs):
             raise RuntimeError("classifier infrastructure down")
 
-        import main as _main
+        from medai_api import main as _main
 
         with patch.object(_main, "run_agent_raw", side_effect=_boom):
             result = _run(g._check_toxicity(_StubCtx(), _StubAgent(), "Patient summary."))
@@ -396,7 +396,7 @@ class ExceptionHandlerTest(unittest.TestCase):
     def test_handler_returns_422_with_structured_detail(self) -> None:
         from fastapi.testclient import TestClient
 
-        import main as _main
+        from medai_api import main as _main
 
         # Create a tiny route that always raises the SDK tripwire so we can
         # observe the handler's response shape without invoking an LLM.
@@ -450,7 +450,7 @@ class MessageRetryOnDisclaimerTest(unittest.TestCase):
         from agents import GuardrailFunctionOutput, OutputGuardrailTripwireTriggered
         from agents.guardrail import OutputGuardrailResult
 
-        import main as _main
+        from medai_api import main as _main
 
         fake_output = GuardrailFunctionOutput(
             output_info={
@@ -472,12 +472,12 @@ class MessageRetryOnDisclaimerTest(unittest.TestCase):
 
     def _post_message(self, run_agent_side_effect):
         from fastapi.testclient import TestClient
-        from auth import current_user_maybe_required
+        from medai_api.auth import current_user_maybe_required
 
-        import main as _main
+        from medai_api import main as _main
         # /api/message lives in routers/message.py post-Refactor 4; patch
         # run_agent on that namespace.
-        from routers import message as _message_router
+        from medai_api.routers import message as _message_router
 
         _main.app.dependency_overrides[current_user_maybe_required] = lambda: None
         try:

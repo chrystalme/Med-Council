@@ -13,8 +13,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
 
-from auth import AuthUser, require_pro
-from escalation import ResendNotConfiguredError, send_patient_email
+from ..auth import AuthUser, require_pro
+from ..escalation import ResendNotConfiguredError, send_patient_email
 
 log = logging.getLogger("medai.email")
 

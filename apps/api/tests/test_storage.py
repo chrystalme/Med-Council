@@ -17,7 +17,7 @@ class LocalStorageTest(unittest.TestCase):
     def setUp(self) -> None:
         self.tmp = tempfile.TemporaryDirectory()
         self.addCleanup(self.tmp.cleanup)
-        from storage import LocalStorage
+        from medai_api.storage import LocalStorage
 
         self.store = LocalStorage(root=Path(self.tmp.name))
 
@@ -50,7 +50,7 @@ class GetStorageTest(unittest.TestCase):
 
     def setUp(self) -> None:
         # Reset memoised provider between tests.
-        import storage as _storage
+        from medai_api import storage as _storage
 
         _storage._storage = None
         self.addCleanup(lambda: setattr(_storage, "_storage", None))
@@ -58,26 +58,26 @@ class GetStorageTest(unittest.TestCase):
     def test_default_is_local(self) -> None:
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("STORAGE_BACKEND", None)
-            from storage import LocalStorage, get_storage
+            from medai_api.storage import LocalStorage, get_storage
 
             self.assertIsInstance(get_storage(), LocalStorage)
 
     def test_explicit_local(self) -> None:
         with patch.dict(os.environ, {"STORAGE_BACKEND": "local"}):
-            from storage import LocalStorage, get_storage
+            from medai_api.storage import LocalStorage, get_storage
 
             self.assertIsInstance(get_storage(), LocalStorage)
 
     def test_unknown_backend_raises(self) -> None:
         with patch.dict(os.environ, {"STORAGE_BACKEND": "s3"}):
-            from storage import get_storage
+            from medai_api.storage import get_storage
 
             with self.assertRaises(RuntimeError):
                 get_storage()
 
     def test_gcs_requires_bucket_name(self) -> None:
         with patch.dict(os.environ, {"STORAGE_BACKEND": "gcs", "GCS_BUCKET": ""}):
-            from storage import get_storage
+            from medai_api.storage import get_storage
 
             with self.assertRaises(RuntimeError):
                 get_storage()
@@ -118,7 +118,7 @@ class GCSStorageTest(unittest.TestCase):
         fake_mod = types.ModuleType("google.cloud.storage")
         fake_mod.Client = _Client  # type: ignore[attr-defined]
         with patch.dict("sys.modules", {"google.cloud.storage": fake_mod}):
-            from storage import GCSStorage
+            from medai_api.storage import GCSStorage
 
             store = GCSStorage(bucket="medai-test")
             self.assertEqual(captured["bucket_name"], "medai-test")

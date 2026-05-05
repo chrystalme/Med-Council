@@ -200,10 +200,10 @@ pnpm run api:dev       # uv run uvicorn … on http://127.0.0.1:8000
 ```bash
 cd apps/api
 uv sync
-uv run uvicorn main:app --reload --port 8000
+uv run uvicorn medai_api.main:app --reload --port 8000
 ```
 
-The process cwd is **`apps/api`**, so `main.py`, `auth.py`, and the council modules import correctly. `uv` keeps the virtualenv at **`apps/api/.venv`** by default.
+The API source lives under **`apps/api/medai_api/`** as a proper Python package. Run uvicorn from `apps/api` and reference the entrypoint as `medai_api.main:app`. `uv` keeps the virtualenv at **`apps/api/.venv`** by default.
 
 The frontend calls the backend via `NEXT_PUBLIC_API_BASE_URL` (default
 `http://localhost:8000`). Clerk-protected routes live under `/case`.

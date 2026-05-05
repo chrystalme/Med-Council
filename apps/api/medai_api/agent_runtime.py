@@ -32,9 +32,9 @@ from agents.tracing.setup import get_trace_provider
 from fastapi import HTTPException
 from pydantic import BaseModel
 
-from council_registry import resolve_model
-from council_schemas import IntakeFollowupOut, parse_intake_followup_text
-from langfuse_tracing import flush_langfuse, langfuse_attributes
+from .council_registry import resolve_model
+from .council_schemas import IntakeFollowupOut, parse_intake_followup_text
+from .langfuse_tracing import flush_langfuse, langfuse_attributes
 
 log = logging.getLogger("medai.runtime")
 
@@ -351,7 +351,7 @@ def resolve_for_request(
     slug into run_agent(...). `req.model` is an allowlist key (e.g.
     "claude-opus-4-7"); the returned value is the OpenRouter slug.
     """
-    from auth import effective_plan  # local import to avoid circular at module load
+    from .auth import effective_plan  # local import to avoid circular at module load
 
     requested = getattr(req, "model", None)
     plan = effective_plan(user)

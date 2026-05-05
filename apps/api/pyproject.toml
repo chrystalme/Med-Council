@@ -1,5 +1,5 @@
 [tool.coverage.run]
-source = ["."]
+source = ["medai_api"]
 omit = ["tests/*", "alembic/*", "scripts/*"]
 
 [tool.coverage.report]

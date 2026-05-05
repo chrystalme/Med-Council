@@ -48,7 +48,7 @@ class _FakeCon:
 
 class CoerceMetadataTest(unittest.TestCase):
     def test_dict_passthrough(self) -> None:
-        from vector_store import _coerce_metadata
+        from medai_api.vector_store import _coerce_metadata
 
         out = _coerce_metadata({"k": 1})
         self.assertEqual(out, {"k": 1})
@@ -57,17 +57,17 @@ class CoerceMetadataTest(unittest.TestCase):
         self.assertNotIn("x", _coerce_metadata({"k": 1}))
 
     def test_json_string(self) -> None:
-        from vector_store import _coerce_metadata
+        from medai_api.vector_store import _coerce_metadata
 
         self.assertEqual(_coerce_metadata('{"a":1}'), {"a": 1})
 
     def test_invalid_json_returns_empty_dict(self) -> None:
-        from vector_store import _coerce_metadata
+        from medai_api.vector_store import _coerce_metadata
 
         self.assertEqual(_coerce_metadata("not-json"), {})
 
     def test_empty_or_none_returns_empty_dict(self) -> None:
-        from vector_store import _coerce_metadata
+        from medai_api.vector_store import _coerce_metadata
 
         self.assertEqual(_coerce_metadata(""), {})
         self.assertEqual(_coerce_metadata(None), {})
@@ -78,7 +78,7 @@ class CoerceMetadataTest(unittest.TestCase):
 
 class PostgresVectorStoreTest(unittest.TestCase):
     def setUp(self) -> None:
-        from vector_store import PostgresVectorStore
+        from medai_api.vector_store import PostgresVectorStore
 
         self.store = PostgresVectorStore()
 
@@ -164,7 +164,7 @@ class PostgresVectorStoreTest(unittest.TestCase):
 
 class GetVectorStoreTest(unittest.TestCase):
     def setUp(self) -> None:
-        import vector_store as _vs
+        from medai_api import vector_store as _vs
 
         _vs._store = None
         self.addCleanup(lambda: setattr(_vs, "_store", None))
@@ -172,13 +172,13 @@ class GetVectorStoreTest(unittest.TestCase):
     def test_default_is_postgres(self) -> None:
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("VECTOR_STORE", None)
-            from vector_store import PostgresVectorStore, get_vector_store
+            from medai_api.vector_store import PostgresVectorStore, get_vector_store
 
             self.assertIsInstance(get_vector_store(), PostgresVectorStore)
 
     def test_explicit_vertex_returns_stub(self) -> None:
         with patch.dict(os.environ, {"VECTOR_STORE": "vertex"}):
-            from vector_store import VertexVectorSearchStore, get_vector_store
+            from medai_api.vector_store import VertexVectorSearchStore, get_vector_store
 
             store = get_vector_store()
             self.assertIsInstance(store, VertexVectorSearchStore)

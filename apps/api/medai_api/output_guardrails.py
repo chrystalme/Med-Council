@@ -37,8 +37,8 @@ from agents import (
 from agents.tracing import custom_span
 from pydantic import ValidationError
 
-from council_registry import MODEL
-from council_schemas import ConsensusOut
+from .council_registry import MODEL
+from .council_schemas import ConsensusOut
 
 log = logging.getLogger("medai.output_guardrails")
 
@@ -500,7 +500,7 @@ async def _check_toxicity(
     with custom_span("output_guardrail.toxicity", data={"agent": getattr(agent, "name", "?")}) as span:
         # Lazy import to dodge the council → main → council import cycle that
         # already exists for the input guardrail (council.py:122).
-        import main as _main
+        from . import main as _main
 
         try:
             raw = await _main.run_agent_raw(

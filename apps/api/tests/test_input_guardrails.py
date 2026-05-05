@@ -16,8 +16,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import council  # noqa: E402
-from council_schemas import MedicalTopicCheck  # noqa: E402
+from medai_api import council  # noqa: E402
+from medai_api.council_schemas import MedicalTopicCheck  # noqa: E402
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -46,7 +46,7 @@ def _patch_classifier(response_text: str):
     async def _fake(*args, **kwargs):
         return response_text
 
-    import main as _main
+    from medai_api import main as _main
 
     return patch.object(_main, "run_agent_raw", side_effect=_fake)
 
@@ -201,8 +201,8 @@ class IntakeRouteIntegrationTest(unittest.TestCase):
     def test_non_medical_symptoms_return_422(self) -> None:
         from fastapi.testclient import TestClient
 
-        import main as _main
-        from auth import current_user_maybe_required
+        from medai_api import main as _main
+        from medai_api.auth import current_user_maybe_required
 
         async def _raise_tripwire(*args, **kwargs):
             raise self._tripwire
@@ -212,7 +212,7 @@ class IntakeRouteIntegrationTest(unittest.TestCase):
         _main.app.dependency_overrides[current_user_maybe_required] = lambda: None
         # /api/intake/followup lives in routers/intake.py post-Refactor 4 —
         # patch run_agent on that namespace.
-        from routers import intake as _intake_router
+        from medai_api.routers import intake as _intake_router
         try:
             with patch.object(_intake_router, "run_agent", side_effect=_raise_tripwire):
                 client = TestClient(_main.app)

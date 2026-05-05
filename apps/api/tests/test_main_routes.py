@@ -26,7 +26,7 @@ os.environ["CLERK_ISSUER"] = ""  # force unconditional override
 # Reload auth so the CLERK_ISSUER override is observed.
 import importlib
 
-import auth as _auth  # noqa: E402
+from medai_api import auth as _auth  # noqa: E402
 
 importlib.reload(_auth)
 
@@ -40,7 +40,7 @@ def _client():
     """
     from fastapi.testclient import TestClient
 
-    import main as _main
+    from medai_api import main as _main
 
     # Replace lifespan with a no-op that swaps in a dummy MultiProvider so
     # any agent_runtime.set_providers call gets sane state — but the routes
@@ -166,7 +166,7 @@ class CasesCrudTest(unittest.TestCase):
         # Cases routes now live in routers/cases.py and call db.connect()
         # directly via a `_db` alias. Patch that alias's connect attr so the
         # whole module's DB usage hits our fake.
-        from routers import cases as _cases_router
+        from medai_api.routers import cases as _cases_router
 
         self._patcher = patch.object(_cases_router._db, "connect", return_value=self.con)
         self._patcher.start()
@@ -240,7 +240,7 @@ class FeedbackRouteTest(unittest.TestCase):
     def setUp(self) -> None:
         self.client = _client()
         self.con = _FakeCon()
-        import main as _main
+        from medai_api import main as _main
 
         self._db_patch = patch.object(_main, "_get_db", return_value=self.con)
         self._db_patch.start()
@@ -251,7 +251,7 @@ class FeedbackRouteTest(unittest.TestCase):
         async def _fake_run_agent(*args, **kwargs):
             return "thanks for the feedback"
 
-        from routers import feedback as _feedback_router
+        from medai_api.routers import feedback as _feedback_router
 
         self._agent_patch = patch.object(_feedback_router, "run_agent", side_effect=_fake_run_agent)
         self._agent_patch.start()
@@ -291,7 +291,7 @@ class IntakeFollowupRouteTest(unittest.TestCase):
         self.client = _client()
 
     def _patch_run_agent(self, return_value: str):
-        from routers import intake as _intake_router
+        from medai_api.routers import intake as _intake_router
 
         async def _fake(*args, **kwargs):
             return return_value
@@ -315,7 +315,7 @@ class TriageRouteTest(unittest.TestCase):
         self.client = _client()
 
     def _patch_run_agent(self, return_value: str):
-        from routers import triage as _triage_router
+        from medai_api.routers import triage as _triage_router
 
         async def _fake(*args, **kwargs):
             return return_value
@@ -350,7 +350,7 @@ class ConsensusRouteTest(unittest.TestCase):
         self.client = _client()
 
     def _patch_run_agent(self, return_value: str):
-        from routers import consensus_plan as _cp_router
+        from medai_api.routers import consensus_plan as _cp_router
 
         async def _fake(*args, **kwargs):
             return return_value
@@ -385,7 +385,7 @@ class PlanRouteTest(unittest.TestCase):
         self.client = _client()
 
     def _patch_run_agent(self, return_value: str):
-        from routers import consensus_plan as _cp_router
+        from medai_api.routers import consensus_plan as _cp_router
 
         async def _fake(*args, **kwargs):
             return return_value
@@ -422,7 +422,7 @@ class MessageRouteTest(unittest.TestCase):
         self.client = _client()
 
     def test_returns_message_text(self) -> None:
-        from routers import message as _message_router
+        from medai_api.routers import message as _message_router
 
         message_text = (
             "Take care of yourself today and rest. Remember, this AI summary is not a "
@@ -455,7 +455,7 @@ class CouncilSpecialistRouteTest(unittest.TestCase):
         self.client = _client()
 
     def _patch_run_agent(self, return_value: str):
-        from routers import council as _council_router
+        from medai_api.routers import council as _council_router
 
         async def _fake(*args, **kwargs):
             return return_value
@@ -496,7 +496,7 @@ class CouncilPhysicianRouteTest(unittest.TestCase):
         self.client = _client()
 
     def test_returns_physician_assessment(self) -> None:
-        from routers import council as _council_router
+        from medai_api.routers import council as _council_router
 
         async def _fake(*args, **kwargs):
             return "Internal medicine: rule out ACS."
@@ -523,7 +523,7 @@ class ResearchRouteTest(unittest.TestCase):
         self.client = _client()
 
     def test_returns_papers_payload(self) -> None:
-        from routers import research as _research_router
+        from medai_api.routers import research as _research_router
 
         papers_json = (
             '{"papers": [{"title": "Acute coronary syndromes", "authors": "Smith J", '
@@ -557,7 +557,7 @@ class DeliberationSelectExpertsRouteTest(unittest.TestCase):
         self.client = _client()
 
     def test_returns_experts_with_internal_medicine_default(self) -> None:
-        from routers import triage as _triage_router
+        from medai_api.routers import triage as _triage_router
 
         async def _fake(*args, **kwargs):
             return (
@@ -587,7 +587,7 @@ class CasePatchRouteTest(unittest.TestCase):
     def setUp(self) -> None:
         self.client = _client()
         self.con = _FakeCon()
-        from routers import cases as _cases_router
+        from medai_api.routers import cases as _cases_router
 
         self._patcher = patch.object(_cases_router._db, "connect", return_value=self.con)
         self._patcher.start()
@@ -619,7 +619,7 @@ class ConsultationsListRouteTest(unittest.TestCase):
     def setUp(self) -> None:
         self.client = _client()
         self.con = _FakeCon()
-        from routers import consultations as _c_router
+        from medai_api.routers import consultations as _c_router
 
         self._patcher = patch.object(_c_router._db, "connect", return_value=self.con)
         self._patcher.start()
@@ -648,7 +648,7 @@ class ConsultationsGetRouteTest(unittest.TestCase):
     def setUp(self) -> None:
         self.client = _client()
         self.con = _FakeCon()
-        from routers import consultations as _c_router
+        from medai_api.routers import consultations as _c_router
 
         self._patcher = patch.object(_c_router._db, "connect", return_value=self.con)
         self._patcher.start()
@@ -698,7 +698,7 @@ class ConsultationsDeleteRouteTest(unittest.TestCase):
     def setUp(self) -> None:
         self.client = _client()
         self.con = _FakeCon()
-        from routers import consultations as _c_router
+        from medai_api.routers import consultations as _c_router
 
         self._patcher = patch.object(_c_router._db, "connect", return_value=self.con)
         self._patcher.start()
@@ -742,7 +742,7 @@ class MessageFollowupRouteTest(unittest.TestCase):
         self.client = _client()
 
     def test_returns_followup_text(self) -> None:
-        from routers import message as _message_router
+        from medai_api.routers import message as _message_router
 
         async def _fake(*args, **kwargs):
             return "Yes, that's a reasonable interpretation. Discuss with your physician — this AI guidance is informational only."
@@ -772,7 +772,7 @@ class AttachmentsListRouteTest(unittest.TestCase):
     def setUp(self) -> None:
         self.client = _client()
         self.con = _FakeCon()
-        from routers import attachments as _att_router
+        from medai_api.routers import attachments as _att_router
 
         self._patcher = patch.object(_att_router._db, "connect", return_value=self.con)
         self._patcher.start()
@@ -787,7 +787,7 @@ class AttachmentsListRouteTest(unittest.TestCase):
     def test_lists_attachments_for_owned_case(self) -> None:
         self.con._cases_row = {"user_id": ""}
         # Real list comes from get_attachment_store().list_for_case — stub it.
-        from attachments import AttachmentRow
+        from medai_api.attachments import AttachmentRow
 
         store_rows = [
             AttachmentRow(
@@ -808,7 +808,7 @@ class AttachmentsListRouteTest(unittest.TestCase):
             def list_for_case(self, con, case_id):
                 return store_rows
 
-        with patch("main.get_attachment_store" if hasattr(__import__("main"), "get_attachment_store") else "attachments.get_attachment_store", return_value=_StubStore()):
+        with patch("medai_api.attachments.get_attachment_store", return_value=_StubStore()):
             r = self.client.get("/api/cases/case_1/attachments")
         self.assertEqual(r.status_code, 200)
         body = r.json()
@@ -824,16 +824,14 @@ class SpeechSynthesizeRouteTest(unittest.TestCase):
         self.client = _client()
 
     def test_returns_audio_bytes(self) -> None:
-        import main as _main
+        from medai_api import main as _main
 
         class _StubProvider:
             def synthesize(self, text, voice="alloy"):
                 return b"fake-mp3-bytes"
 
-        with patch.object(_main, "get_speech_provider" if hasattr(_main, "get_speech_provider") else "speech.get_speech_provider", return_value=_StubProvider(), create=True):
-            # Some versions don't expose get_speech_provider on _main directly;
-            # patch the source module too.
-            with patch("speech.get_speech_provider", return_value=_StubProvider()):
+        with patch("medai_api.speech.get_speech_provider", return_value=_StubProvider()):
+            with patch("medai_api.routers.speech.get_speech_provider", return_value=_StubProvider(), create=True):
                 r = self.client.post(
                     "/api/speech/synthesize",
                     json={"text": "hello"},
@@ -850,7 +848,7 @@ class SaveConsultationRouteTest(unittest.TestCase):
     def setUp(self) -> None:
         self.client = _client()
         self.con = _FakeCon()
-        from routers import consultations as _c_router
+        from medai_api.routers import consultations as _c_router
 
         self._db_patch = patch.object(_c_router._db, "connect", return_value=self.con)
         self._db_patch.start()
@@ -869,8 +867,7 @@ class SaveConsultationRouteTest(unittest.TestCase):
         self.con.execute = execute  # type: ignore[assignment]
 
         # Stub embed/vector so we don't need to inject those modules.
-        with patch("embeddings.get_embedding_provider"), patch(
-            "vector_store.get_vector_store"
+        with patch("medai_api.embeddings.get_embedding_provider"), patch("medai_api.vector_store.get_vector_store"
         ):
             r = self.client.post(
                 "/api/patient/consultations",
@@ -908,8 +905,7 @@ class SaveConsultationRouteTest(unittest.TestCase):
             def upsert(self, *args, **kwargs):
                 pass
 
-        with patch("embeddings.get_embedding_provider", return_value=_StubEmb()), patch(
-            "vector_store.get_vector_store", return_value=_StubStore()
+        with patch("medai_api.embeddings.get_embedding_provider", return_value=_StubEmb()), patch("medai_api.vector_store.get_vector_store", return_value=_StubStore()
         ):
             r = self.client.post(
                 "/api/patient/consultations",
@@ -969,7 +965,7 @@ class ExceptionHandlersTest(unittest.TestCase):
         self.client = _client()
 
     def test_unexpected_error_surfaces_as_500(self) -> None:
-        import main as _main
+        from medai_api import main as _main
         from fastapi.testclient import TestClient
 
         # raise_server_exceptions=False so TestClient honours our exception
@@ -980,7 +976,7 @@ class ExceptionHandlersTest(unittest.TestCase):
             raise RuntimeError("simulated provider crash")
 
         # /api/intake/followup now lives in routers/intake.py — patch run_agent there.
-        from routers import intake as _intake_router
+        from medai_api.routers import intake as _intake_router
 
         with patch.object(_intake_router, "run_agent", side_effect=_boom):
             r = client.post(

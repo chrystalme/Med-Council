@@ -20,10 +20,10 @@ from typing import Optional
 from agents import OutputGuardrailTripwireTriggered
 from fastapi import APIRouter, Depends, Response
 
-from agent_runtime import resolve_for_request, run_agent, traced_workflow
-from auth import AuthUser, current_user_maybe_required
-from council import followup_qa_agent, message_agent
-from schemas import MessageIn, PatientFollowUpIn
+from ..agent_runtime import resolve_for_request, run_agent, traced_workflow
+from ..auth import AuthUser, current_user_maybe_required
+from ..council import followup_qa_agent, message_agent
+from ..schemas import MessageIn, PatientFollowUpIn
 
 log = logging.getLogger("medai.message")
 
