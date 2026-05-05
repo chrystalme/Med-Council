@@ -379,7 +379,7 @@ export function CaseWorkspace() {
       if (data.needs_symptoms) {
         setErr(
           data.message ??
-            "I'm here to help with health concerns. Could you describe a symptom or medical question you'd like to discuss?",
+            'I am your medical intake Agent, kindly give me your medical symptoms for analysis.',
         );
         return;
       }
