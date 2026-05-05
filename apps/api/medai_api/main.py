@@ -120,8 +120,12 @@ def _run_migrations() -> None:
     from alembic import command
     from alembic.config import Config as AlembicConfig
 
-    cfg = AlembicConfig(str(Path(__file__).resolve().parent / "alembic.ini"))
-    cfg.set_main_option("script_location", str(Path(__file__).resolve().parent / "alembic"))
+    # alembic.ini and alembic/ live in apps/api/, one level above the
+    # medai_api package. Resolve from this file to that root explicitly so
+    # the migrations work regardless of the process cwd.
+    api_root = Path(__file__).resolve().parent.parent
+    cfg = AlembicConfig(str(api_root / "alembic.ini"))
+    cfg.set_main_option("script_location", str(api_root / "alembic"))
     command.upgrade(cfg, "head")
 
 
