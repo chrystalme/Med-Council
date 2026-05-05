@@ -128,7 +128,7 @@ async def _check_medical_topic(
     which then blocked every case at the intake stage.
     """
     text = input if isinstance(input, str) else str(input)
-    import main as _main
+    from . import main as _main
     raw = await _main.run_agent_raw(_medical_topic_agent, text)
     check = _parse_medical_check(raw if isinstance(raw, str) else str(raw))
     return GuardrailFunctionOutput(

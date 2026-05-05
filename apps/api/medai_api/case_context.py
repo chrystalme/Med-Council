@@ -29,8 +29,8 @@ def retrieve_patient_context(user_id: str, query: str, top_k: int = 3) -> str:
     """
     if not user_id or not (query or "").strip():
         return ""
-    from embeddings import get_embedding_provider
-    from vector_store import get_vector_store
+    from .embeddings import get_embedding_provider
+    from .vector_store import get_vector_store
 
     con = _db.connect()
     try:
@@ -88,7 +88,7 @@ def attachment_block_for_case(
     filter, added a round-trip per agent stage, and was the dominant cost
     on Cloud Run cold starts (~5–10ms × stages).
     """
-    from attachments import format_attachment_block, get_attachment_store
+    from .attachments import format_attachment_block, get_attachment_store
 
     if not user_id:
         return ""

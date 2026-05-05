@@ -113,9 +113,9 @@ async def save_consultation(
     Called automatically by the frontend after the consensus completes. Both
     tiers store; Free is capped at FREE_CONSULTATION_CAP.
     """
-    from auth import effective_plan
-    from embeddings import get_embedding_provider
-    from vector_store import get_vector_store
+    from ..auth import effective_plan
+    from ..embeddings import get_embedding_provider
+    from ..vector_store import get_vector_store
 
     user_id = cases_user_id(user)
     plan = effective_plan(user)
@@ -234,7 +234,7 @@ async def list_consultations(
     response: Response,
     user: Optional[AuthUser] = Depends(current_user_maybe_required),
 ):
-    from auth import effective_plan
+    from ..auth import effective_plan
 
     user_id = cases_user_id(user)
     plan = effective_plan(user)
@@ -282,8 +282,8 @@ async def retrieve_consultations(
     req: RetrieveIn,
     user: Optional[AuthUser] = Depends(current_user_maybe_required),
 ):
-    from embeddings import get_embedding_provider
-    from vector_store import get_vector_store
+    from ..embeddings import get_embedding_provider
+    from ..vector_store import get_vector_store
 
     user_id = cases_user_id(user)
     if not user_id:
@@ -374,7 +374,7 @@ async def delete_consultation(
     consultation_id: str,
     user: Optional[AuthUser] = Depends(current_user_maybe_required),
 ):
-    from vector_store import get_vector_store
+    from ..vector_store import get_vector_store
 
     user_id = cases_user_id(user)
     con = _db.connect()

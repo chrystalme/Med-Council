@@ -37,7 +37,7 @@ async def speech_transcribe(
     this endpoint gates access to the higher-quality Whisper flow and is
     behind `require_pro`.
     """
-    from speech import SpeechQuotaError, SpeechUnavailableError, get_speech_provider
+    from ..speech import SpeechQuotaError, SpeechUnavailableError, get_speech_provider
 
     try:
         data = await audio.read()
@@ -80,7 +80,7 @@ async def speech_synthesize(
     Free tier uses `window.speechSynthesis` on the client; this endpoint is
     Pro-only for higher-quality voices.
     """
-    from speech import SpeechQuotaError, SpeechUnavailableError, get_speech_provider
+    from ..speech import SpeechQuotaError, SpeechUnavailableError, get_speech_provider
 
     voice = req.voice if req.voice in _SPEECH_VOICES else "alloy"
     try:

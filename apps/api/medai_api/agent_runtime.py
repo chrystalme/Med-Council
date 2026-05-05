@@ -351,7 +351,7 @@ def resolve_for_request(
     slug into run_agent(...). `req.model` is an allowlist key (e.g.
     "claude-opus-4-7"); the returned value is the OpenRouter slug.
     """
-    from auth import effective_plan  # local import to avoid circular at module load
+    from .auth import effective_plan  # local import to avoid circular at module load
 
     requested = getattr(req, "model", None)
     plan = effective_plan(user)

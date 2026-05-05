@@ -61,7 +61,7 @@ def view_feedback(token: str):
         raise HTTPException(status_code=404, detail="Not found")
     # Lazy-import _get_db from main to avoid a hard import cycle. main.py owns
     # the DB factory until db.py absorbs it (next refactor pass).
-    from main import _get_db
+    from ..main import _get_db
 
     con = _get_db()
     rows = con.execute(

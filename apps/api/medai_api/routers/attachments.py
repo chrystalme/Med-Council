@@ -36,13 +36,13 @@ async def create_attachment(
 
     Body is multipart/form-data. Either `file` OR `text` must be non-empty.
     """
-    from attachments import (
+    from ..attachments import (
         AttachmentStoreError,
         extract_text,
         get_attachment_store,
         is_mime_supported,
     )
-    from auth import effective_plan
+    from ..auth import effective_plan
 
     if kind not in ("file", "pasted"):
         raise HTTPException(status_code=400, detail="kind must be 'file' or 'pasted'.")
@@ -125,7 +125,7 @@ async def list_attachments(
     case_id: str,
     user: Optional[AuthUser] = Depends(current_user_maybe_required),
 ):
-    from attachments import get_attachment_store
+    from ..attachments import get_attachment_store
 
     user_id = cases_user_id(user)
     con = _db.connect()
@@ -162,7 +162,7 @@ async def delete_attachment(
     attachment_id: str,
     user: Optional[AuthUser] = Depends(current_user_maybe_required),
 ):
-    from attachments import get_attachment_store
+    from ..attachments import get_attachment_store
 
     user_id = cases_user_id(user)
     con = _db.connect()

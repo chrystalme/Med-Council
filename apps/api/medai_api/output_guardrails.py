@@ -500,7 +500,7 @@ async def _check_toxicity(
     with custom_span("output_guardrail.toxicity", data={"agent": getattr(agent, "name", "?")}) as span:
         # Lazy import to dodge the council → main → council import cycle that
         # already exists for the input guardrail (council.py:122).
-        import main as _main
+        from . import main as _main
 
         try:
             raw = await _main.run_agent_raw(
