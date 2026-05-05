@@ -237,9 +237,11 @@ export function ConsultationDetail({ consultationId }: { consultationId: string 
                   <article key={p.id ?? i} className="border-t border-line pt-4 first:border-t-0 first:pt-0">
                     <p className="mono-label text-ink-muted mb-1">{p.specialty ?? "Specialist"}</p>
                     <h3 className="font-display text-[1.125rem] text-ink mb-2">{p.name ?? "—"}</h3>
-                    <div className="text-[14.5px] text-ink-slate leading-relaxed whitespace-pre-wrap">
-                      {p.assessment || <em className="text-ink-faint">no assessment</em>}
-                    </div>
+                    {p.assessment ? (
+                      <Markdown>{p.assessment}</Markdown>
+                    ) : (
+                      <em className="text-ink-faint">no assessment</em>
+                    )}
                   </article>
                 ))}
               </div>
