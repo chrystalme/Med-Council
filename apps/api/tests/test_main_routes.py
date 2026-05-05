@@ -619,9 +619,9 @@ class ConsultationsListRouteTest(unittest.TestCase):
     def setUp(self) -> None:
         self.client = _client()
         self.con = _FakeCon()
-        import main as _main
+        from routers import consultations as _c_router
 
-        self._patcher = patch.object(_main, "_get_db", return_value=self.con)
+        self._patcher = patch.object(_c_router._db, "connect", return_value=self.con)
         self._patcher.start()
         self.addCleanup(self._patcher.stop)
 
@@ -648,9 +648,9 @@ class ConsultationsGetRouteTest(unittest.TestCase):
     def setUp(self) -> None:
         self.client = _client()
         self.con = _FakeCon()
-        import main as _main
+        from routers import consultations as _c_router
 
-        self._patcher = patch.object(_main, "_get_db", return_value=self.con)
+        self._patcher = patch.object(_c_router._db, "connect", return_value=self.con)
         self._patcher.start()
         self.addCleanup(self._patcher.stop)
 
@@ -698,9 +698,9 @@ class ConsultationsDeleteRouteTest(unittest.TestCase):
     def setUp(self) -> None:
         self.client = _client()
         self.con = _FakeCon()
-        import main as _main
+        from routers import consultations as _c_router
 
-        self._patcher = patch.object(_main, "_get_db", return_value=self.con)
+        self._patcher = patch.object(_c_router._db, "connect", return_value=self.con)
         self._patcher.start()
         self.addCleanup(self._patcher.stop)
 
@@ -850,9 +850,9 @@ class SaveConsultationRouteTest(unittest.TestCase):
     def setUp(self) -> None:
         self.client = _client()
         self.con = _FakeCon()
-        import main as _main
+        from routers import consultations as _c_router
 
-        self._db_patch = patch.object(_main, "_get_db", return_value=self.con)
+        self._db_patch = patch.object(_c_router._db, "connect", return_value=self.con)
         self._db_patch.start()
         self.addCleanup(self._db_patch.stop)
 
