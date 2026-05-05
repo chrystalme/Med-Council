@@ -57,30 +57,30 @@ class _FakeCon:
 
 class ExtractTextTest(unittest.TestCase):
     def test_empty_blob_returns_empty(self) -> None:
-        from attachments import extract_text
+        from medai_api.attachments import extract_text
 
         self.assertEqual(extract_text(b"", "text/plain", "x.txt"), "")
 
     def test_text_blob_decoded(self) -> None:
-        from attachments import extract_text
+        from medai_api.attachments import extract_text
 
         self.assertEqual(extract_text(b"  hi there\n", "text/plain", "x.txt"), "hi there")
 
     def test_text_subtypes_are_decoded(self) -> None:
-        from attachments import extract_text
+        from medai_api.attachments import extract_text
 
         # text/* prefix branch
         self.assertEqual(extract_text(b"hello", "text/x-custom", "f.txt"), "hello")
 
     def test_image_returns_placeholder(self) -> None:
-        from attachments import extract_text
+        from medai_api.attachments import extract_text
 
         out = extract_text(b"\x89PNG\r\n", "image/png", "scan.png")
         self.assertIn("[Image attached:", out)
         self.assertIn("scan.png", out)
 
     def test_unknown_mime_returns_placeholder(self) -> None:
-        from attachments import extract_text
+        from medai_api.attachments import extract_text
 
         out = extract_text(b"...", "application/x-unknown", "f.bin")
         self.assertIn("[File attached:", out)
@@ -88,19 +88,19 @@ class ExtractTextTest(unittest.TestCase):
 
 class IsMimeSupportedTest(unittest.TestCase):
     def test_text_pdf_image_supported(self) -> None:
-        from attachments import is_mime_supported
+        from medai_api.attachments import is_mime_supported
 
         for mime in ("text/plain", "text/markdown", "application/pdf", "image/png", "image/jpeg"):
             self.assertTrue(is_mime_supported(mime), msg=mime)
 
     def test_arbitrary_supported_via_prefix(self) -> None:
-        from attachments import is_mime_supported
+        from medai_api.attachments import is_mime_supported
 
         self.assertTrue(is_mime_supported("text/x-custom"))
         self.assertTrue(is_mime_supported("image/x-rare"))
 
     def test_unsupported(self) -> None:
-        from attachments import is_mime_supported
+        from medai_api.attachments import is_mime_supported
 
         self.assertFalse(is_mime_supported("application/octet-stream"))
         self.assertFalse(is_mime_supported("video/mp4"))
@@ -111,7 +111,7 @@ class IsMimeSupportedTest(unittest.TestCase):
 
 class PostgresAttachmentStoreSaveTest(unittest.TestCase):
     def setUp(self) -> None:
-        from attachments import PostgresAttachmentStore
+        from medai_api.attachments import PostgresAttachmentStore
 
         self.store = PostgresAttachmentStore()
 
@@ -139,7 +139,7 @@ class PostgresAttachmentStoreSaveTest(unittest.TestCase):
         self.assertIn("INSERT INTO case_attachments", con.executed[1][0])
 
     def test_save_rejects_oversize_for_free_tier(self) -> None:
-        from attachments import AttachmentStoreError
+        from medai_api.attachments import AttachmentStoreError
 
         con = _FakeCon()
         oversized = b"x" * (1 * 1024 * 1024 + 1)  # 1 MB + 1 byte
@@ -159,7 +159,7 @@ class PostgresAttachmentStoreSaveTest(unittest.TestCase):
         self.assertEqual(cm.exception.code, "attachment_size")
 
     def test_save_rejects_count_cap_for_free_tier(self) -> None:
-        from attachments import AttachmentStoreError, FREE_PER_CASE_LIMIT
+        from medai_api.attachments import AttachmentStoreError, FREE_PER_CASE_LIMIT
 
         con = _FakeCon()
         con._count_response = {"n": FREE_PER_CASE_LIMIT}
@@ -199,7 +199,7 @@ class PostgresAttachmentStoreSaveTest(unittest.TestCase):
 
 class PostgresAttachmentStoreOtherOpsTest(unittest.TestCase):
     def setUp(self) -> None:
-        from attachments import PostgresAttachmentStore
+        from medai_api.attachments import PostgresAttachmentStore
 
         self.store = PostgresAttachmentStore()
 
@@ -259,7 +259,7 @@ class PostgresAttachmentStoreOtherOpsTest(unittest.TestCase):
 
 class GetAttachmentStoreTest(unittest.TestCase):
     def setUp(self) -> None:
-        import attachments as _att
+        from medai_api import attachments as _att
 
         _att._store = None
         self.addCleanup(lambda: setattr(_att, "_store", None))
@@ -267,13 +267,13 @@ class GetAttachmentStoreTest(unittest.TestCase):
     def test_default_is_postgres(self) -> None:
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("ATTACHMENT_STORE", None)
-            from attachments import PostgresAttachmentStore, get_attachment_store
+            from medai_api.attachments import PostgresAttachmentStore, get_attachment_store
 
             self.assertIsInstance(get_attachment_store(), PostgresAttachmentStore)
 
     def test_explicit_gcs_returns_stub(self) -> None:
         with patch.dict(os.environ, {"ATTACHMENT_STORE": "gcs"}):
-            from attachments import GcsAttachmentStore, get_attachment_store
+            from medai_api.attachments import GcsAttachmentStore, get_attachment_store
 
             store = get_attachment_store()
             self.assertIsInstance(store, GcsAttachmentStore)
@@ -286,7 +286,7 @@ class GetAttachmentStoreTest(unittest.TestCase):
 
 class FormatAttachmentBlockTest(unittest.TestCase):
     def _row(self, **overrides):
-        from attachments import AttachmentRow
+        from medai_api.attachments import AttachmentRow
 
         defaults = dict(
             id="x",
@@ -304,12 +304,12 @@ class FormatAttachmentBlockTest(unittest.TestCase):
         return AttachmentRow(**defaults)
 
     def test_empty_returns_empty_string(self) -> None:
-        from attachments import format_attachment_block
+        from medai_api.attachments import format_attachment_block
 
         self.assertEqual(format_attachment_block([]), "")
 
     def test_renders_file_attachment(self) -> None:
-        from attachments import format_attachment_block
+        from medai_api.attachments import format_attachment_block
 
         out = format_attachment_block([self._row()])
         self.assertIn("--- Test results provided by patient ---", out)
@@ -318,14 +318,14 @@ class FormatAttachmentBlockTest(unittest.TestCase):
         self.assertTrue(out.endswith("---"))
 
     def test_renders_pasted_text(self) -> None:
-        from attachments import format_attachment_block
+        from medai_api.attachments import format_attachment_block
 
         out = format_attachment_block([self._row(kind="pasted", filename=None, text="ECG: NSR")])
         self.assertIn("pasted text", out)
         self.assertIn("ECG: NSR", out)
 
     def test_question_index_links_to_question(self) -> None:
-        from attachments import format_attachment_block
+        from medai_api.attachments import format_attachment_block
 
         out = format_attachment_block(
             [self._row(question_index=1)],
@@ -335,7 +335,7 @@ class FormatAttachmentBlockTest(unittest.TestCase):
         self.assertIn("Severity?", out)
 
     def test_no_text_falls_back_to_placeholder(self) -> None:
-        from attachments import format_attachment_block
+        from medai_api.attachments import format_attachment_block
 
         out = format_attachment_block([self._row(text="")])
         self.assertIn("(no extractable text)", out)

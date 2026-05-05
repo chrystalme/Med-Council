@@ -8,7 +8,7 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import langfuse_tracing
+from medai_api import langfuse_tracing
 
 
 class LangfuseTracingTest(unittest.TestCase):

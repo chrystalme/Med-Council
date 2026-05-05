@@ -10,7 +10,7 @@ import unittest
 
 from pydantic import ValidationError
 
-from council_schemas import (
+from medai_api.council_schemas import (
     ConsensusOut,
     IntakeFollowupOut,
     MedicalTopicCheck,

@@ -25,19 +25,19 @@ class _RateLimited(Exception):
 
 class LooksLikeQuotaErrorTest(unittest.TestCase):
     def test_status_code_attribute(self) -> None:
-        from speech import _looks_like_quota_error
+        from medai_api.speech import _looks_like_quota_error
 
         self.assertTrue(_looks_like_quota_error(_RateLimited("nope")))
 
     def test_message_match(self) -> None:
-        from speech import _looks_like_quota_error
+        from medai_api.speech import _looks_like_quota_error
 
         self.assertTrue(_looks_like_quota_error(RuntimeError("rate limit exceeded")))
         self.assertTrue(_looks_like_quota_error(RuntimeError("HTTP 429")))
         self.assertTrue(_looks_like_quota_error(RuntimeError("insufficient_quota")))
 
     def test_other_errors_pass_through(self) -> None:
-        from speech import _looks_like_quota_error
+        from medai_api.speech import _looks_like_quota_error
 
         self.assertFalse(_looks_like_quota_error(ValueError("bad input")))
 
@@ -48,14 +48,14 @@ class LooksLikeQuotaErrorTest(unittest.TestCase):
 class OpenAICompatibleSpeechProviderTest(unittest.TestCase):
     def test_requires_speech_or_openrouter_key(self) -> None:
         with patch.dict(os.environ, {"SPEECH_API_KEY": "", "OPENROUTER_API_KEY": ""}):
-            from speech import OpenAICompatibleSpeechProvider, SpeechUnavailableError
+            from medai_api.speech import OpenAICompatibleSpeechProvider, SpeechUnavailableError
 
             with self.assertRaises(SpeechUnavailableError):
                 OpenAICompatibleSpeechProvider()
 
     def _build(self, env: dict[str, str] | None = None):
         with patch.dict(os.environ, {"SPEECH_API_KEY": "k", **(env or {})}):
-            from speech import OpenAICompatibleSpeechProvider
+            from medai_api.speech import OpenAICompatibleSpeechProvider
 
             return OpenAICompatibleSpeechProvider()
 
@@ -85,7 +85,7 @@ class OpenAICompatibleSpeechProviderTest(unittest.TestCase):
         self.assertEqual(captured["file"], ("audio.webm", b"\x00\x01\x02", "audio/webm"))
 
     def test_transcribe_quota_raises_quota_error(self) -> None:
-        from speech import SpeechQuotaError
+        from medai_api.speech import SpeechQuotaError
 
         provider = self._build()
 
@@ -141,7 +141,7 @@ class OpenAICompatibleSpeechProviderTest(unittest.TestCase):
         self.assertEqual(provider.synthesize("hi", voice="nova"), b"mp3-audio")
 
     def test_synthesize_quota_raises_quota_error(self) -> None:
-        from speech import SpeechQuotaError
+        from medai_api.speech import SpeechQuotaError
 
         provider = self._build()
 
@@ -165,13 +165,13 @@ class OpenAICompatibleSpeechProviderTest(unittest.TestCase):
 
 class DisabledSpeechProviderTest(unittest.TestCase):
     def test_transcribe_raises(self) -> None:
-        from speech import DisabledSpeechProvider, SpeechUnavailableError
+        from medai_api.speech import DisabledSpeechProvider, SpeechUnavailableError
 
         with self.assertRaises(SpeechUnavailableError):
             DisabledSpeechProvider().transcribe(b"", "audio/webm")
 
     def test_synthesize_raises(self) -> None:
-        from speech import DisabledSpeechProvider, SpeechUnavailableError
+        from medai_api.speech import DisabledSpeechProvider, SpeechUnavailableError
 
         with self.assertRaises(SpeechUnavailableError):
             DisabledSpeechProvider().synthesize("hi")
@@ -182,7 +182,7 @@ class DisabledSpeechProviderTest(unittest.TestCase):
 
 class GetSpeechProviderTest(unittest.TestCase):
     def setUp(self) -> None:
-        import speech as _sp
+        from medai_api import speech as _sp
 
         _sp._provider = None
         self.addCleanup(lambda: setattr(_sp, "_provider", None))
@@ -190,19 +190,19 @@ class GetSpeechProviderTest(unittest.TestCase):
     def test_default_is_openai_compatible(self) -> None:
         with patch.dict(os.environ, {"SPEECH_API_KEY": "k"}):
             os.environ.pop("SPEECH_PROVIDER", None)
-            from speech import OpenAICompatibleSpeechProvider, get_speech_provider
+            from medai_api.speech import OpenAICompatibleSpeechProvider, get_speech_provider
 
             self.assertIsInstance(get_speech_provider(), OpenAICompatibleSpeechProvider)
 
     def test_explicit_disabled(self) -> None:
         with patch.dict(os.environ, {"SPEECH_PROVIDER": "disabled"}):
-            from speech import DisabledSpeechProvider, get_speech_provider
+            from medai_api.speech import DisabledSpeechProvider, get_speech_provider
 
             self.assertIsInstance(get_speech_provider(), DisabledSpeechProvider)
 
     def test_provider_is_memoised(self) -> None:
         with patch.dict(os.environ, {"SPEECH_PROVIDER": "disabled"}):
-            from speech import get_speech_provider
+            from medai_api.speech import get_speech_provider
 
             self.assertIs(get_speech_provider(), get_speech_provider())
 
