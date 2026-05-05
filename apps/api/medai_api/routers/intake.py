@@ -6,6 +6,7 @@ returns four numbered follow-up questions to refine the workup.
 
 from __future__ import annotations
 
+import re
 from typing import Optional
 
 from agents import InputGuardrailTripwireTriggered
@@ -23,6 +24,32 @@ from ..council_schemas import PatientSymptomsIn
 from ..helpers import utc_now  # noqa: F401  # placeholder for future call sites
 
 router = APIRouter()
+
+
+# Common openings that aren't medical content but also aren't off-topic
+# attempts — patient hasn't said anything substantive yet.
+_GREETING_RE = re.compile(
+    r"^(hi|hello|hey|yo|hiya|howdy|sup|what'?s up|good (morning|afternoon|evening|day)|"
+    r"test|testing|ok|okay|thanks|thank you)[!.?\s]*$",
+    re.IGNORECASE,
+)
+
+
+def _looks_like_greeting(text: str) -> bool:
+    """True if the input is short / greeting-like rather than substantive off-topic content.
+
+    Used to split the medical-topic guardrail trip into two response shapes:
+    short noise gets a friendly nudge to describe symptoms; longer off-topic
+    content (jailbreak attempts, recipe requests, anything that's actively
+    leading the LLM somewhere else) gets the firm "medical questions only"
+    message instead.
+    """
+    s = (text or "").strip()
+    if not s:
+        return True
+    if len(s) <= 20:
+        return True
+    return bool(_GREETING_RE.match(s))
 
 
 @router.post("/api/intake/followup")
@@ -43,18 +70,26 @@ async def intake_followup(
                 model=model_slug,
             )
     except InputGuardrailTripwireTriggered as e:
-        # Patient sent something the medical-topic classifier flagged as non-
-        # medical (e.g. a greeting, small-talk). Don't error — return 200 with
-        # an empty `questions` list and a friendly nudge so the UI can invite
-        # them to describe their actual symptoms instead of advancing.
+        # Medical-topic classifier rejected the input. Always return 200 (so
+        # the frontend doesn't show "Intake failed (HTTP 422)" — that's
+        # confusing UX for a patient who just said "Hi"). Two messages,
+        # split on whether the input is a benign greeting or substantive
+        # off-topic content (cooking recipe, jailbreak attempt, etc.).
         info = e.guardrail_result.output.output_info if e.guardrail_result.output else {}
+        if _looks_like_greeting(req.symptoms):
+            message = (
+                "Hi! I'm here to help with health concerns. "
+                "Could you describe a symptom or medical question you'd like to discuss?"
+            )
+        else:
+            message = (
+                "This service is designed for medical questions only. "
+                "Please describe a health concern, symptom, or medical situation."
+            )
         return {
             "questions": [],
             "needs_symptoms": True,
-            "message": (
-                "Hi! I'm here to help with health concerns. "
-                "Could you describe a symptom or medical question you'd like to discuss?"
-            ),
+            "message": message,
             "reasoning": info.get("reasoning", ""),
         }
     try:

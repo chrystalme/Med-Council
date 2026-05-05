@@ -199,11 +199,12 @@ class IntakeRouteIntegrationTest(unittest.TestCase):
             )
         )
 
-    def test_non_medical_symptoms_return_friendly_nudge(self) -> None:
+    def _post_with_tripwire(self, symptoms: str):
         from fastapi.testclient import TestClient
 
         from medai_api import main as _main
         from medai_api.auth import current_user_maybe_required
+        from medai_api.routers import intake as _intake_router
 
         async def _raise_tripwire(*args, **kwargs):
             raise self._tripwire
@@ -211,24 +212,32 @@ class IntakeRouteIntegrationTest(unittest.TestCase):
         # Bypass Clerk auth in tests (the dev .env may set CLERK_ISSUER, which
         # would otherwise 401 the request before the guardrail path runs).
         _main.app.dependency_overrides[current_user_maybe_required] = lambda: None
-        # /api/intake/followup lives in routers/intake.py post-Refactor 4 —
-        # patch run_agent on that namespace.
-        from medai_api.routers import intake as _intake_router
         try:
             with patch.object(_intake_router, "run_agent", side_effect=_raise_tripwire):
                 client = TestClient(_main.app)
-                resp = client.post(
-                    "/api/intake/followup",
-                    json={"symptoms": "How do I cook the perfect carbonara?"},
-                )
+                return client.post("/api/intake/followup", json={"symptoms": symptoms})
         finally:
             _main.app.dependency_overrides.pop(current_user_maybe_required, None)
 
+    def test_greeting_returns_friendly_nudge(self) -> None:
+        resp = self._post_with_tripwire("Hi")
         self.assertEqual(resp.status_code, 200)
         body = resp.json()
         self.assertEqual(body["questions"], [])
         self.assertTrue(body["needs_symptoms"])
+        # Friendly framing for the patient who just said hello.
+        self.assertIn("Hi!", body["message"])
         self.assertIn("symptom", body["message"].lower())
+
+    def test_off_topic_input_returns_firm_message(self) -> None:
+        # A substantive off-topic prompt (cooking recipe, jailbreak attempt,
+        # anything actively leading the LLM elsewhere) gets the firm message.
+        resp = self._post_with_tripwire("How do I cook the perfect carbonara with guanciale?")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["questions"], [])
+        self.assertTrue(body["needs_symptoms"])
+        self.assertIn("medical questions only", body["message"])
         self.assertIn("Cooking recipe", body["reasoning"])
 
 
