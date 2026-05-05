@@ -166,17 +166,18 @@ class CheckMedicalTopicTest(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Integration: /api/intake/followup maps a tripwire to 422 + structured detail
+#  Integration: /api/intake/followup maps a tripwire to a 200 nudge response
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class IntakeRouteIntegrationTest(unittest.TestCase):
     """Drive ``/api/intake/followup`` end-to-end with a synthetic tripwire.
 
-    The route catches ``InputGuardrailTripwireTriggered`` directly (not via a
-    global handler — see main.py:1257). We patch ``main.run_agent`` so the
-    intake call raises a constructed tripwire, then assert the route's 422
-    response shape matches what the frontend's ``formatCouncilError`` expects.
+    The route catches ``InputGuardrailTripwireTriggered`` directly. We patch
+    the router's ``run_agent`` so the intake call raises a constructed
+    tripwire, then assert the response surfaces a friendly ``needs_symptoms``
+    nudge instead of erroring out — sending a greeting like "Hi" should
+    invite the patient to describe symptoms, not return HTTP 422.
     """
 
     def setUp(self) -> None:
@@ -198,7 +199,7 @@ class IntakeRouteIntegrationTest(unittest.TestCase):
             )
         )
 
-    def test_non_medical_symptoms_return_422(self) -> None:
+    def test_non_medical_symptoms_return_friendly_nudge(self) -> None:
         from fastapi.testclient import TestClient
 
         from medai_api import main as _main
@@ -223,12 +224,12 @@ class IntakeRouteIntegrationTest(unittest.TestCase):
         finally:
             _main.app.dependency_overrides.pop(current_user_maybe_required, None)
 
-        self.assertEqual(resp.status_code, 422)
+        self.assertEqual(resp.status_code, 200)
         body = resp.json()
-        # Existing handler uses ``error`` (not ``code``) as the key — see main.py:1262.
-        self.assertEqual(body["detail"]["error"], "non_medical_input")
-        self.assertIn("medical questions only", body["detail"]["message"])
-        self.assertIn("Cooking recipe", body["detail"]["reasoning"])
+        self.assertEqual(body["questions"], [])
+        self.assertTrue(body["needs_symptoms"])
+        self.assertIn("symptom", body["message"].lower())
+        self.assertIn("Cooking recipe", body["reasoning"])
 
 
 if __name__ == "__main__":
