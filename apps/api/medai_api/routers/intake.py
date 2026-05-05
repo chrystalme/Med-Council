@@ -78,9 +78,8 @@ async def intake_followup(
         info = e.guardrail_result.output.output_info if e.guardrail_result.output else {}
         if _looks_like_greeting(req.symptoms):
             message = (
-                "Hello — I'm your medical intake assistant. "
-                "Please describe the symptoms or health concern you'd like "
-                "to discuss so we can begin your assessment."
+                "Hello! I'm your medical intake assistant — what symptoms "
+                "or health concern would you like to discuss today?"
             )
         else:
             message = (

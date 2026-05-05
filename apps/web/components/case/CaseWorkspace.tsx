@@ -374,13 +374,14 @@ export function CaseWorkspace() {
         },
       );
       // Guardrail tripped — the input wasn't a medical question. Surface the
-      // nudge in the banner and stay on the intake step so the patient can
-      // edit their symptoms and try again.
+      // nudge in the banner, clear the textarea so the patient can start
+      // typing real symptoms in a clean field, and stay on the intake step.
       if (data.needs_symptoms) {
         setErr(
           data.message ??
-            "Hello — I'm your medical intake assistant. Please describe the symptoms or health concern you'd like to discuss so we can begin your assessment.",
+            "Hello! I'm your medical intake assistant — what symptoms or health concern would you like to discuss today?",
         );
+        setSymptoms('');
         return;
       }
       const lines = parseNumberedQuestions(data.questions);
