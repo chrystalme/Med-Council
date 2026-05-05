@@ -772,9 +772,9 @@ class AttachmentsListRouteTest(unittest.TestCase):
     def setUp(self) -> None:
         self.client = _client()
         self.con = _FakeCon()
-        import main as _main
+        from routers import attachments as _att_router
 
-        self._patcher = patch.object(_main, "_get_db", return_value=self.con)
+        self._patcher = patch.object(_att_router._db, "connect", return_value=self.con)
         self._patcher.start()
         self.addCleanup(self._patcher.stop)
 
