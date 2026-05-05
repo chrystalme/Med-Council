@@ -8,9 +8,8 @@ from datetime import datetime, timezone
 
 from agents import function_tool
 
-import db as _db
-
-from council_registry import SPECIALIST_META
+from . import db as _db
+from .council_registry import SPECIALIST_META
 
 
 @function_tool(

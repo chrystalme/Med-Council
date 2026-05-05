@@ -24,10 +24,10 @@ from typing import Annotated, Any, Optional
 from fastapi import APIRouter, Depends, HTTPException, Response
 from pydantic import BaseModel, Field, field_validator
 
-import db as _db
-from auth import AuthUser, current_user_maybe_required
-from consultation_memory import build_consultation_memory_text
-from helpers import cases_user_id, json_object
+from .. import db as _db
+from ..auth import AuthUser, current_user_maybe_required
+from ..consultation_memory import build_consultation_memory_text
+from ..helpers import cases_user_id, json_object
 
 log = logging.getLogger("medai.consultations")
 

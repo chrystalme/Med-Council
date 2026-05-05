@@ -37,8 +37,8 @@ from agents import (
 from agents.tracing import custom_span
 from pydantic import ValidationError
 
-from council_registry import MODEL
-from council_schemas import ConsensusOut
+from .council_registry import MODEL
+from .council_schemas import ConsensusOut
 
 log = logging.getLogger("medai.output_guardrails")
 

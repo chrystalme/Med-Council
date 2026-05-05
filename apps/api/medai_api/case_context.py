@@ -15,8 +15,7 @@ from __future__ import annotations
 
 import logging
 
-import db as _db
-
+from . import db as _db
 log = logging.getLogger("medai.case_context")
 
 MAX_RETRIEVED_CONSULTATION_CHARS = 4000

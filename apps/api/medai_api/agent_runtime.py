@@ -32,9 +32,9 @@ from agents.tracing.setup import get_trace_provider
 from fastapi import HTTPException
 from pydantic import BaseModel
 
-from council_registry import resolve_model
-from council_schemas import IntakeFollowupOut, parse_intake_followup_text
-from langfuse_tracing import flush_langfuse, langfuse_attributes
+from .council_registry import resolve_model
+from .council_schemas import IntakeFollowupOut, parse_intake_followup_text
+from .langfuse_tracing import flush_langfuse, langfuse_attributes
 
 log = logging.getLogger("medai.runtime")
 

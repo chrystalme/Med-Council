@@ -16,7 +16,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, File, HTTPException, Response, UploadFile
 from pydantic import BaseModel, Field
 
-from auth import AuthUser, require_pro
+from ..auth import AuthUser, require_pro
 
 log = logging.getLogger("medai.speech")
 

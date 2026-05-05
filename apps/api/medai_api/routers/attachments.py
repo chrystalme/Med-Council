@@ -16,9 +16,9 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 
-import db as _db
-from auth import AuthUser, current_user_maybe_required
-from helpers import cases_user_id
+from .. import db as _db
+from ..auth import AuthUser, current_user_maybe_required
+from ..helpers import cases_user_id
 
 router = APIRouter()
 

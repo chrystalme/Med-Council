@@ -14,11 +14,11 @@ from __future__ import annotations
 from agents import Agent, InputGuardrail, GuardrailFunctionOutput, RunContextWrapper
 from agents.run import Runner
 
-from council_handoffs import build_specialist_handoffs, build_stage_router_handoffs
-from council_registry import ALL_SPECIALIST_IDS, MODEL, SPECIALIST_META, specialist_list_for_prompts
-from council_schemas import IntakeFollowupOut, MedicalTopicCheck
-from council_tools import COUNCIL_COORDINATOR_TOOLS, FEEDBACK_TOOLS
-from output_guardrails import (
+from .council_handoffs import build_specialist_handoffs, build_stage_router_handoffs
+from .council_registry import ALL_SPECIALIST_IDS, MODEL, SPECIALIST_META, specialist_list_for_prompts
+from .council_schemas import IntakeFollowupOut, MedicalTopicCheck
+from .council_tools import COUNCIL_COORDINATOR_TOOLS, FEEDBACK_TOOLS
+from .output_guardrails import (
     consensus_output_guardrail,
     message_guardrail,
     plan_structure_guardrail,

@@ -13,9 +13,9 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from auth import AuthUser, current_user_maybe_required
-from council import MODEL, SPECIALIST_META
-from council_registry import DEFAULT_MODEL_KEY, models_for_plan
+from ..auth import AuthUser, current_user_maybe_required
+from ..council import MODEL, SPECIALIST_META
+from ..council_registry import DEFAULT_MODEL_KEY, models_for_plan
 
 router = APIRouter()
 
