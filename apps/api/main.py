@@ -282,11 +282,13 @@ from routers import cases as _cases_router  # noqa: E402
 from routers import consensus_plan as _consensus_plan_router  # noqa: E402
 from routers import consultations as _consultations_router  # noqa: E402
 from routers import council as _council_router  # noqa: E402
+from routers import email as _email_router  # noqa: E402
 from routers import feedback as _feedback_router  # noqa: E402
 from routers import intake as _intake_router  # noqa: E402
 from routers import message as _message_router  # noqa: E402
 from routers import meta as _meta_router  # noqa: E402
 from routers import research as _research_router  # noqa: E402
+from routers import speech as _speech_router  # noqa: E402
 from routers import triage as _triage_router  # noqa: E402
 
 app.include_router(_meta_router.router)
@@ -300,6 +302,8 @@ app.include_router(_consensus_plan_router.router)
 app.include_router(_message_router.router)
 app.include_router(_consultations_router.router)
 app.include_router(_attachments_router.router)
+app.include_router(_speech_router.router)
+app.include_router(_email_router.router)
 
 
 @app.exception_handler(OutputGuardrailTripwireTriggered)
@@ -484,163 +488,5 @@ from case_context import attachment_block_for_case as _attachment_block_for_case
 # Attachment routes (/api/cases/{id}/attachments*) live in routers/attachments.py.
 
 
-# ─────────────────────────────────────────────────────────────────────────────
-#  Voice I/O (Phase 2) — Whisper transcription + OpenAI TTS (Pro-only)
-# ─────────────────────────────────────────────────────────────────────────────
-
-_SPEECH_VOICES = {"alloy", "echo", "fable", "onyx", "nova", "shimmer"}
-
-
-@app.post("/api/speech/transcribe")
-async def speech_transcribe(
-    audio: UploadFile = File(...),
-    user: AuthUser = Depends(require_pro),  # noqa: B008 — FastAPI dep pattern
-):
-    """Transcribe an uploaded audio blob via the configured SpeechProvider.
-
-    Free tier is expected to use the browser's Web Speech API client-side;
-    this endpoint gates access to the higher-quality Whisper flow and is
-    behind `require_pro`.
-    """
-    from speech import get_speech_provider, SpeechQuotaError, SpeechUnavailableError
-
-    try:
-        data = await audio.read()
-        if not data:
-            raise HTTPException(status_code=400, detail="Empty audio upload")
-        mime = audio.content_type or "audio/webm"
-        filename = audio.filename or "audio.webm"
-        provider = get_speech_provider()
-        text = provider.transcribe(data, mime, filename=filename)
-        return {"text": text}
-    except HTTPException:
-        raise
-    except SpeechQuotaError as exc:
-        raise HTTPException(
-            status_code=429,
-            detail={"code": "transcribe_quota", "message": str(exc)},
-        ) from exc
-    except SpeechUnavailableError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={"code": "transcribe_unavailable", "message": str(exc)},
-        ) from exc
-    except Exception as exc:
-        log.exception("transcription failed")
-        raise HTTPException(status_code=502, detail={"code": "transcribe_failed", "message": str(exc)[:200]}) from exc
-
-
-class TTSIn(BaseModel):
-    text: Annotated[str, Field(min_length=1, max_length=4000)]
-    voice: str = "alloy"
-
-
-@app.post("/api/speech/synthesize")
-async def speech_synthesize(
-    req: TTSIn,
-    user: AuthUser = Depends(require_pro),
-):
-    """Synthesise an mp3 from `text` via the configured SpeechProvider.
-
-    Free tier uses `window.speechSynthesis` on the client; this endpoint is
-    Pro-only for higher-quality voices.
-    """
-    from speech import get_speech_provider
-
-    from speech import SpeechQuotaError, SpeechUnavailableError
-
-    voice = req.voice if req.voice in _SPEECH_VOICES else "alloy"
-    try:
-        provider = get_speech_provider()
-        audio_bytes = provider.synthesize(req.text, voice=voice)
-        return Response(
-            content=audio_bytes,
-            media_type="audio/mpeg",
-            headers={"Cache-Control": "no-store"},
-        )
-    except HTTPException:
-        raise
-    except SpeechQuotaError as exc:
-        raise HTTPException(
-            status_code=429,
-            detail={"code": "synthesize_quota", "message": str(exc)},
-        ) from exc
-    except SpeechUnavailableError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={"code": "synthesize_unavailable", "message": str(exc)},
-        ) from exc
-    except Exception as exc:
-        log.exception("synthesis failed")
-        raise HTTPException(status_code=502, detail={"code": "synthesize_failed", "message": str(exc)[:200]}) from exc
-
-
-# ─────────────────────────────────────────────────────────────────────────────
-#  Email to patient (Pro only) — send plan + patient message via Resend
-# ─────────────────────────────────────────────────────────────────────────────
-
-
-class EmailToPatientIn(BaseModel):
-    to: Annotated[str, Field(min_length=3, max_length=320, pattern=r"^[^@\s]+@[^@\s]+\.[^@\s]+$")]
-    patient_name: str | None = None
-    subject: str | None = None
-    consensus: dict | None = None
-    plan: str = ""
-    message: str = ""
-
-
-@app.post("/api/patient/email")
-async def email_patient(
-    req: EmailToPatientIn,
-    user: AuthUser = Depends(require_pro),
-):
-    """Send the coordinated plan + patient message to the patient's inbox via Resend.
-
-    Pro-only. Requires RESEND_API_KEY + RESEND_FROM_EMAIL to be configured.
-    """
-    if not (req.plan.strip() or req.message.strip()):
-        raise HTTPException(
-            status_code=400,
-            detail={
-                "code": "empty_email",
-                "message": "Provide a plan, a patient message, or both before sending.",
-            },
-        )
-
-    c = req.consensus or {}
-    primary_dx = (
-        c.get("primaryDiagnosis")
-        or c.get("primary_diagnosis")
-        or None
-    )
-    urgency = c.get("urgency") or c.get("urgencyLevel") or None
-    confidence = c.get("confidence") if isinstance(c.get("confidence"), (int, float)) else None
-
-    try:
-        result = send_patient_email(
-            to=req.to,
-            patient_name=req.patient_name,
-            subject=req.subject,
-            primary_dx=primary_dx,
-            urgency=urgency,
-            confidence=confidence,
-            plan_md=req.plan,
-            message_md=req.message,
-            reply_to=user.email,
-        )
-    except ResendNotConfiguredError as exc:
-        raise HTTPException(
-            status_code=503,
-            detail={
-                "code": "email_not_configured",
-                "message": str(exc),
-            },
-        ) from exc
-    except RuntimeError as exc:
-        raise HTTPException(
-            status_code=502,
-            detail={"code": "email_send_failed", "message": str(exc)[:400]},
-        ) from exc
-
-    log.info("patient email sent by user=%s to=%s", user.user_id, req.to)
-    return {"ok": True, "provider_id": result.get("id")}
+# Voice I/O (/api/speech/*) lives in routers/speech.py.
+# Email to patient (/api/patient/email) lives in routers/email.py.
