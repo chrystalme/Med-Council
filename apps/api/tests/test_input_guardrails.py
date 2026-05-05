@@ -226,7 +226,7 @@ class IntakeRouteIntegrationTest(unittest.TestCase):
         self.assertEqual(body["questions"], [])
         self.assertTrue(body["needs_symptoms"])
         # Greeting branch — agent introduces itself and asks for symptoms.
-        self.assertIn("medical intake Agent", body["message"])
+        self.assertIn("medical intake assistant", body["message"])
         self.assertIn("symptom", body["message"].lower())
 
     def test_off_topic_input_returns_firm_message(self) -> None:
