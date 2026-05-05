@@ -10,8 +10,8 @@
     "typecheck": "pnpm --filter web exec tsc --noEmit",
     "verify": "pnpm lint && pnpm typecheck && pnpm build",
     "api:install": "cd apps/api && uv sync",
-    "api:dev": "cd apps/api && uv run uvicorn main:app --reload --port 8000",
-    "api:verify": "cd apps/api && uv run python -c 'import main; import auth; import council; print(\"import ok\")'"
+    "api:dev": "cd apps/api && uv run uvicorn medai_api.main:app --reload --port 8000",
+    "api:verify": "cd apps/api && uv run python -c 'from medai_api import main, auth, council; print(\"import ok\")'"
   },
   "engines": {
     "node": ">=20",
