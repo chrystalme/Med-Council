@@ -6,6 +6,11 @@
 # Trade-off: both workspaces now reference the same physical resources. Drift
 # on the resource blocks will be applied by whichever workspace plans last.
 # The long-term fix is to split shared infra into its own root module.
+#
+# Mitigation today: `var.secret_names` and `var.ar_repo` MUST NOT be overridden
+# per-workspace — they live in variables.tf with a single shared default. CI
+# enforces this via the `terraform-shared-config-guard` job in .github/workflows/ci.yml,
+# which fails any PR that introduces `secret_names` or `ar_repo` into env/*.tfvars.
 
 import {
   to = google_artifact_registry_repository.api
