@@ -85,7 +85,7 @@ jobs:
         run: uv sync --frozen
 
       - name: Import check
-        run: uv run python -c "import main; import auth; import council; print('import ok')"
+        run: uv run python -c "from medai_api import main, auth, council; print('import ok')"
 
       # All tests under apps/api/tests/ stub network calls (Langfuse, OpenAI,
       # Resend, urllib) — verified by audit. Failures here block the merge.
