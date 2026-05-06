@@ -13,12 +13,12 @@ from typing import Optional
 from agents.tracing import custom_span
 from fastapi import APIRouter, Depends, Response
 
-from agent_runtime import resolve_for_request, run_agent, traced_workflow
-from auth import AuthUser, current_user_maybe_required
-from council import research_agent
-from council_schemas import parse_research_papers
-from external.pubmed import search_papers
-from schemas import ResearchIn
+from ..agent_runtime import resolve_for_request, run_agent, traced_workflow
+from ..auth import AuthUser, current_user_maybe_required
+from ..council import research_agent
+from ..council_schemas import parse_research_papers
+from ..external.pubmed import search_papers
+from ..schemas import ResearchIn
 
 log = logging.getLogger("medai.research")
 

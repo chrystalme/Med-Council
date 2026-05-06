@@ -361,7 +361,11 @@ export function CaseWorkspace() {
     setBusy('Drafting follow-up questions…');
     const tok = await tokenFn();
     try {
-      const data = await councilJson<{ questions: string }>(
+      const data = await councilJson<{
+        questions: string;
+        needs_symptoms?: boolean;
+        message?: string;
+      }>(
         `/api/intake/followup`,
         {
           method: 'POST',
@@ -369,6 +373,17 @@ export function CaseWorkspace() {
           body: JSON.stringify({ symptoms, model: modelKey, case_id: caseId }),
         },
       );
+      // Guardrail tripped — the input wasn't a medical question. Surface the
+      // nudge in the banner, clear the textarea so the patient can start
+      // typing real symptoms in a clean field, and stay on the intake step.
+      if (data.needs_symptoms) {
+        setErr(
+          data.message ??
+            "Hello! I'm your medical intake assistant — what symptoms or health concern would you like to discuss today?",
+        );
+        setSymptoms('');
+        return;
+      }
       const lines = parseNumberedQuestions(data.questions);
       if (lines.length < 4) {
         setFqLines(lines.length ? lines : [data.questions]);

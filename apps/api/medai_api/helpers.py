@@ -11,7 +11,7 @@ import json
 from datetime import datetime, timezone
 from typing import Any, Optional
 
-from auth import AuthUser
+from .auth import AuthUser
 
 
 def utc_now() -> str:

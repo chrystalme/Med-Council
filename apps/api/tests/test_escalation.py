@@ -50,28 +50,28 @@ def _capturing_urlopen():
 
 class IsUrgentTest(unittest.TestCase):
     def test_canonical_urgency_strings(self) -> None:
-        from escalation import is_urgent
+        from medai_api.escalation import is_urgent
 
         for value in ("urgent", "EMERGENT", " emergency ", "Stat", "immediate", "critical"):
             with self.subTest(value=value):
                 self.assertTrue(is_urgent({"urgency": value}))
 
     def test_routine_and_unknown_are_not_urgent(self) -> None:
-        from escalation import is_urgent
+        from medai_api.escalation import is_urgent
 
         self.assertFalse(is_urgent({"urgency": "routine"}))
         self.assertFalse(is_urgent({"urgency": "low"}))
         self.assertFalse(is_urgent({}))
 
     def test_alt_camelcase_key(self) -> None:
-        from escalation import is_urgent
+        from medai_api.escalation import is_urgent
 
         self.assertTrue(is_urgent({"urgencyLevel": "URGENT"}))
 
 
 class SafeSubjectPartTest(unittest.TestCase):
     def test_strips_control_chars_and_caps_length(self) -> None:
-        from escalation import _safe_subject_part
+        from medai_api.escalation import _safe_subject_part
 
         # Embedded CR/LF and control bytes — must all be filtered.
         out = _safe_subject_part("subject\r\nx\x00y\tz", max_len=120)
@@ -86,12 +86,12 @@ class SafeSubjectPartTest(unittest.TestCase):
 
 class MaskEmailTest(unittest.TestCase):
     def test_local_part_is_masked(self) -> None:
-        from escalation import _mask_email
+        from medai_api.escalation import _mask_email
 
         self.assertEqual(_mask_email("alice@clinic.com"), "ali***@clinic.com")
 
     def test_no_at_sign_returns_stars(self) -> None:
-        from escalation import _mask_email
+        from medai_api.escalation import _mask_email
 
         self.assertEqual(_mask_email("nothing-special"), "***")
         self.assertEqual(_mask_email(""), "***")
@@ -99,20 +99,20 @@ class MaskEmailTest(unittest.TestCase):
 
 class ResolveRecipientTest(unittest.TestCase):
     def test_passthrough_when_no_override(self) -> None:
-        from escalation import _resolve_recipient
+        from medai_api.escalation import _resolve_recipient
 
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("EMAIL_OVERRIDE_TO", None)
             self.assertEqual(_resolve_recipient("alice@clinic.com"), "alice@clinic.com")
 
     def test_override_redirects_when_different(self) -> None:
-        from escalation import _resolve_recipient
+        from medai_api.escalation import _resolve_recipient
 
         with patch.dict(os.environ, {"EMAIL_OVERRIDE_TO": "dev@example.com"}):
             self.assertEqual(_resolve_recipient("alice@clinic.com"), "dev@example.com")
 
     def test_override_passthrough_when_match(self) -> None:
-        from escalation import _resolve_recipient
+        from medai_api.escalation import _resolve_recipient
 
         with patch.dict(os.environ, {"EMAIL_OVERRIDE_TO": "alice@clinic.com"}):
             # Already pointed at the target — no redirect, just return as-is.
@@ -137,7 +137,7 @@ class MaybeEscalateOnCallTest(unittest.TestCase):
         )
 
     def test_skipped_when_resend_not_configured(self) -> None:
-        import escalation
+        from medai_api import escalation
 
         # No RESEND_API_KEY env at all — the function should bail before any
         # urlopen call. We assert urlopen is never invoked.
@@ -153,7 +153,7 @@ class MaybeEscalateOnCallTest(unittest.TestCase):
         self.assertEqual(called, [], "urlopen must not be invoked when Resend isn't configured")
 
     def test_skipped_when_urgency_not_in_allowlist(self) -> None:
-        import escalation
+        from medai_api import escalation
 
         called: list[bool] = []
 
@@ -166,7 +166,7 @@ class MaybeEscalateOnCallTest(unittest.TestCase):
         self.assertEqual(called, [], "urlopen must not be invoked when urgency is routine")
 
     def test_sends_when_configured_and_urgent(self) -> None:
-        import escalation
+        from medai_api import escalation
 
         fake_urlopen, captured = _capturing_urlopen()
         with self._enable_resend(), patch.object(escalation.urllib.request, "urlopen", fake_urlopen):
@@ -178,7 +178,7 @@ class MaybeEscalateOnCallTest(unittest.TestCase):
 
     def test_dx_symptoms_and_json_are_html_escaped(self) -> None:
         """Regression test for the C2 fix — model-emitted tags must not leak."""
-        import escalation
+        from medai_api import escalation
 
         consensus = {
             "primaryDiagnosis": "<script>alert('x')</script>",
@@ -198,7 +198,7 @@ class MaybeEscalateOnCallTest(unittest.TestCase):
 
     def test_http_error_is_swallowed(self) -> None:
         """Resend 4xx must not raise — escalation is best-effort."""
-        import escalation
+        from medai_api import escalation
 
         def _raise(*args, **kwargs):
             raise urllib.error.HTTPError(
@@ -225,7 +225,7 @@ class NotifyDoctorWithMessageTest(unittest.TestCase):
         )
 
     def test_skipped_when_recipient_blank(self) -> None:
-        import escalation
+        from medai_api import escalation
 
         with self._enable_resend():
             self.assertEqual(
@@ -240,7 +240,7 @@ class NotifyDoctorWithMessageTest(unittest.TestCase):
             )
 
     def test_skipped_when_resend_not_configured(self) -> None:
-        import escalation
+        from medai_api import escalation
 
         with patch.dict(os.environ, {"RESEND_API_KEY": "", "RESEND_FROM_EMAIL": ""}):
             self.assertEqual(
@@ -255,7 +255,7 @@ class NotifyDoctorWithMessageTest(unittest.TestCase):
             )
 
     def test_skipped_when_not_urgent(self) -> None:
-        import escalation
+        from medai_api import escalation
 
         with self._enable_resend():
             self.assertEqual(
@@ -270,7 +270,7 @@ class NotifyDoctorWithMessageTest(unittest.TestCase):
             )
 
     def test_sent_when_all_preconditions_met(self) -> None:
-        import escalation
+        from medai_api import escalation
 
         fake_urlopen, captured = _capturing_urlopen()
         with self._enable_resend(), patch.object(escalation.urllib.request, "urlopen", fake_urlopen):
@@ -288,7 +288,7 @@ class NotifyDoctorWithMessageTest(unittest.TestCase):
         self.assertIn("dyspnoea", payload["html"])
 
     def test_returns_failed_on_http_error(self) -> None:
-        import escalation
+        from medai_api import escalation
 
         def _raise(*args, **kwargs):
             raise urllib.error.HTTPError(
@@ -317,14 +317,14 @@ class NotifyDoctorWithMessageTest(unittest.TestCase):
 
 class SendPatientEmailTest(unittest.TestCase):
     def test_raises_when_not_configured(self) -> None:
-        import escalation
+        from medai_api import escalation
 
         with patch.dict(os.environ, {"RESEND_API_KEY": "", "RESEND_FROM_EMAIL": ""}):
             with self.assertRaises(escalation.ResendNotConfiguredError):
                 escalation.send_patient_email(to="alice@example.com")
 
     def test_default_subject_when_no_dx(self) -> None:
-        import escalation
+        from medai_api import escalation
 
         fake_urlopen, captured = _capturing_urlopen()
         with patch.dict(
@@ -338,7 +338,7 @@ class SendPatientEmailTest(unittest.TestCase):
         self.assertEqual(payload["subject"], "Your MedAI Council consultation summary")
 
     def test_subject_includes_primary_dx(self) -> None:
-        import escalation
+        from medai_api import escalation
 
         fake_urlopen, captured = _capturing_urlopen()
         with patch.dict(
@@ -351,7 +351,7 @@ class SendPatientEmailTest(unittest.TestCase):
         self.assertIn("MI", payload["subject"])
 
     def test_reply_to_threaded_when_supplied(self) -> None:
-        import escalation
+        from medai_api import escalation
 
         fake_urlopen, captured = _capturing_urlopen()
         with patch.dict(
@@ -368,7 +368,7 @@ class SendPatientEmailTest(unittest.TestCase):
         self.assertEqual(payload.get("reply_to"), ["doc@example.com"])
 
     def test_http_error_raises_runtime_error(self) -> None:
-        import escalation
+        from medai_api import escalation
 
         def _raise(*args, **kwargs):
             raise urllib.error.HTTPError(

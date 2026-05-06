@@ -11,7 +11,7 @@ class GetEmbeddingProviderTest(unittest.TestCase):
     """The factory should pick the right backend and memoise the result."""
 
     def setUp(self) -> None:
-        import embeddings as _emb
+        from medai_api import embeddings as _emb
 
         _emb._provider = None
         self.addCleanup(lambda: setattr(_emb, "_provider", None))
@@ -23,14 +23,14 @@ class GetEmbeddingProviderTest(unittest.TestCase):
             clear=False,
         ):
             os.environ.pop("EMBEDDING_PROVIDER", None)
-            from embeddings import OpenAIEmbeddingProvider, get_embedding_provider
+            from medai_api.embeddings import OpenAIEmbeddingProvider, get_embedding_provider
 
             provider = get_embedding_provider()
             self.assertIsInstance(provider, OpenAIEmbeddingProvider)
 
     def test_explicit_vertex_returns_stub(self) -> None:
         with patch.dict(os.environ, {"EMBEDDING_PROVIDER": "vertex"}):
-            from embeddings import VertexAIEmbeddingProvider, get_embedding_provider
+            from medai_api.embeddings import VertexAIEmbeddingProvider, get_embedding_provider
 
             provider = get_embedding_provider()
             self.assertIsInstance(provider, VertexAIEmbeddingProvider)
@@ -38,7 +38,7 @@ class GetEmbeddingProviderTest(unittest.TestCase):
 
     def test_provider_is_memoised(self) -> None:
         with patch.dict(os.environ, {"EMBEDDING_PROVIDER": "vertex"}):
-            from embeddings import get_embedding_provider
+            from medai_api.embeddings import get_embedding_provider
 
             self.assertIs(get_embedding_provider(), get_embedding_provider())
 
@@ -46,14 +46,14 @@ class GetEmbeddingProviderTest(unittest.TestCase):
 class OpenAIEmbeddingProviderTest(unittest.TestCase):
     def test_init_requires_api_key(self) -> None:
         with patch.dict(os.environ, {"OPENAI_API_KEY": ""}):
-            from embeddings import OpenAIEmbeddingProvider
+            from medai_api.embeddings import OpenAIEmbeddingProvider
 
             with self.assertRaises(RuntimeError):
                 OpenAIEmbeddingProvider()
 
     def test_embed_uses_client(self) -> None:
         with patch.dict(os.environ, {"OPENAI_API_KEY": "k"}):
-            from embeddings import OpenAIEmbeddingProvider
+            from medai_api.embeddings import OpenAIEmbeddingProvider
 
             provider = OpenAIEmbeddingProvider(model="m")
 
@@ -78,7 +78,7 @@ class OpenAIEmbeddingProviderTest(unittest.TestCase):
 
     def test_embed_batch_chunks(self) -> None:
         with patch.dict(os.environ, {"OPENAI_API_KEY": "k"}):
-            from embeddings import OpenAIEmbeddingProvider
+            from medai_api.embeddings import OpenAIEmbeddingProvider
 
             provider = OpenAIEmbeddingProvider()
 
@@ -111,13 +111,13 @@ class OpenAIEmbeddingProviderTest(unittest.TestCase):
 
 class VertexAIEmbeddingProviderTest(unittest.TestCase):
     def test_embed_raises_not_implemented(self) -> None:
-        from embeddings import VertexAIEmbeddingProvider
+        from medai_api.embeddings import VertexAIEmbeddingProvider
 
         with self.assertRaises(NotImplementedError):
             VertexAIEmbeddingProvider().embed("x")
 
     def test_embed_batch_raises_not_implemented(self) -> None:
-        from embeddings import VertexAIEmbeddingProvider
+        from medai_api.embeddings import VertexAIEmbeddingProvider
 
         with self.assertRaises(NotImplementedError):
             VertexAIEmbeddingProvider().embed_batch(["x"])

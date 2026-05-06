@@ -13,9 +13,9 @@ from typing import Any, Optional
 from fastapi import APIRouter, Depends, Request
 from fastapi.responses import JSONResponse, RedirectResponse
 
-from auth import AuthUser, current_user_maybe_required
-from council import MODEL, SPECIALIST_META
-from council_registry import DEFAULT_MODEL_KEY, models_for_plan
+from ..auth import AuthUser, current_user_maybe_required
+from ..council import MODEL, SPECIALIST_META
+from ..council_registry import DEFAULT_MODEL_KEY, models_for_plan
 
 router = APIRouter()
 
@@ -103,7 +103,7 @@ async def me(
                    immediately after subscribing so you don't have to wait
                    up to 60s for the cache to expire).
     """
-    from auth import (
+    from ..auth import (
         _plan_from_claims,
         _plan_from_clerk_api,
         auth_configured,
@@ -165,7 +165,7 @@ async def list_models(
     Pro-only entries when the caller is on the Free tier. The frontend dropdown
     uses this to render the picker.
     """
-    from auth import effective_plan
+    from ..auth import effective_plan
 
     plan = effective_plan(user)
     return {

@@ -43,6 +43,10 @@ def upgrade() -> None:
         """
     )
 
+    # The `case_state` column is intentionally NOT declared here — it is
+    # added by 0002_consultation_case_state. An earlier edit duplicated the
+    # column in both migrations; the IF NOT EXISTS guards hid it at runtime
+    # but broke 0002's downgrade and confused autogenerate diffs.
     op.execute(
         """
         CREATE TABLE IF NOT EXISTS consultations (
@@ -54,7 +58,6 @@ def upgrade() -> None:
             icd_code     TEXT,
             urgency      TEXT,
             confidence   INTEGER,
-            case_state   JSONB       NOT NULL DEFAULT '{}'::jsonb,
             created_at   TIMESTAMPTZ NOT NULL DEFAULT NOW()
         )
         """

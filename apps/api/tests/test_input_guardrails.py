@@ -16,8 +16,8 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import council  # noqa: E402
-from council_schemas import MedicalTopicCheck  # noqa: E402
+from medai_api import council  # noqa: E402
+from medai_api.council_schemas import MedicalTopicCheck  # noqa: E402
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -46,7 +46,7 @@ def _patch_classifier(response_text: str):
     async def _fake(*args, **kwargs):
         return response_text
 
-    import main as _main
+    from medai_api import main as _main
 
     return patch.object(_main, "run_agent_raw", side_effect=_fake)
 
@@ -166,17 +166,18 @@ class CheckMedicalTopicTest(unittest.TestCase):
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-#  Integration: /api/intake/followup maps a tripwire to 422 + structured detail
+#  Integration: /api/intake/followup maps a tripwire to a 200 nudge response
 # ─────────────────────────────────────────────────────────────────────────────
 
 
 class IntakeRouteIntegrationTest(unittest.TestCase):
     """Drive ``/api/intake/followup`` end-to-end with a synthetic tripwire.
 
-    The route catches ``InputGuardrailTripwireTriggered`` directly (not via a
-    global handler — see main.py:1257). We patch ``main.run_agent`` so the
-    intake call raises a constructed tripwire, then assert the route's 422
-    response shape matches what the frontend's ``formatCouncilError`` expects.
+    The route catches ``InputGuardrailTripwireTriggered`` directly. We patch
+    the router's ``run_agent`` so the intake call raises a constructed
+    tripwire, then assert the response surfaces a friendly ``needs_symptoms``
+    nudge instead of erroring out — sending a greeting like "Hi" should
+    invite the patient to describe symptoms, not return HTTP 422.
     """
 
     def setUp(self) -> None:
@@ -198,11 +199,12 @@ class IntakeRouteIntegrationTest(unittest.TestCase):
             )
         )
 
-    def test_non_medical_symptoms_return_422(self) -> None:
+    def _post_with_tripwire(self, symptoms: str):
         from fastapi.testclient import TestClient
 
-        import main as _main
-        from auth import current_user_maybe_required
+        from medai_api import main as _main
+        from medai_api.auth import current_user_maybe_required
+        from medai_api.routers import intake as _intake_router
 
         async def _raise_tripwire(*args, **kwargs):
             raise self._tripwire
@@ -210,25 +212,33 @@ class IntakeRouteIntegrationTest(unittest.TestCase):
         # Bypass Clerk auth in tests (the dev .env may set CLERK_ISSUER, which
         # would otherwise 401 the request before the guardrail path runs).
         _main.app.dependency_overrides[current_user_maybe_required] = lambda: None
-        # /api/intake/followup lives in routers/intake.py post-Refactor 4 —
-        # patch run_agent on that namespace.
-        from routers import intake as _intake_router
         try:
             with patch.object(_intake_router, "run_agent", side_effect=_raise_tripwire):
                 client = TestClient(_main.app)
-                resp = client.post(
-                    "/api/intake/followup",
-                    json={"symptoms": "How do I cook the perfect carbonara?"},
-                )
+                return client.post("/api/intake/followup", json={"symptoms": symptoms})
         finally:
             _main.app.dependency_overrides.pop(current_user_maybe_required, None)
 
-        self.assertEqual(resp.status_code, 422)
+    def test_greeting_returns_friendly_nudge(self) -> None:
+        resp = self._post_with_tripwire("Hi")
+        self.assertEqual(resp.status_code, 200)
         body = resp.json()
-        # Existing handler uses ``error`` (not ``code``) as the key — see main.py:1262.
-        self.assertEqual(body["detail"]["error"], "non_medical_input")
-        self.assertIn("medical questions only", body["detail"]["message"])
-        self.assertIn("Cooking recipe", body["detail"]["reasoning"])
+        self.assertEqual(body["questions"], [])
+        self.assertTrue(body["needs_symptoms"])
+        # Greeting branch — agent introduces itself and asks for symptoms.
+        self.assertIn("medical intake assistant", body["message"])
+        self.assertIn("symptom", body["message"].lower())
+
+    def test_off_topic_input_returns_firm_message(self) -> None:
+        # A substantive off-topic prompt (cooking recipe, jailbreak attempt,
+        # anything actively leading the LLM elsewhere) gets the firm message.
+        resp = self._post_with_tripwire("How do I cook the perfect carbonara with guanciale?")
+        self.assertEqual(resp.status_code, 200)
+        body = resp.json()
+        self.assertEqual(body["questions"], [])
+        self.assertTrue(body["needs_symptoms"])
+        self.assertIn("medical questions only", body["message"])
+        self.assertIn("Cooking recipe", body["reasoning"])
 
 
 if __name__ == "__main__":
