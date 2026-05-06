@@ -3,6 +3,7 @@
 import { useAuth } from "@clerk/nextjs";
 import { useCallback, useEffect, useMemo, useState } from "react";
 import Link from "next/link";
+import { useRouter } from "next/navigation";
 import { councilJson } from "@/lib/council-api";
 import { Markdown } from "./Markdown";
 import { ConsensusView } from "./ConsensusView";
@@ -38,6 +39,9 @@ type ConsultationDetailResponse = {
   case_state: CaseState;
 };
 
+type ConsultationListItem = { id: string; created_at: string };
+type ConsultationListResponse = { consultations: ConsultationListItem[] };
+
 const TABS = [
   { key: "intake", numeral: "I", label: "Intake" },
   { key: "followup", numeral: "II", label: "Follow-up" },
@@ -64,10 +68,12 @@ function availabilityFor(state: CaseState, key: TabKey): boolean {
 
 export function ConsultationDetail({ consultationId }: { consultationId: string }) {
   const { getToken, isLoaded, isSignedIn } = useAuth();
+  const router = useRouter();
   const [data, setData] = useState<ConsultationDetailResponse | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [tab, setTab] = useState<TabKey>("intake");
+  const [siblings, setSiblings] = useState<ConsultationListItem[]>([]);
 
   const load = useCallback(async () => {
     if (!isSignedIn) return;
@@ -100,6 +106,54 @@ export function ConsultationDetail({ consultationId }: { consultationId: string 
     // eslint-disable-next-line react-hooks/set-state-in-effect
     if (isLoaded) void load();
   }, [isLoaded, load]);
+
+  // Sibling list backs the prev/next chevrons. Fetched once per mount.
+  useEffect(() => {
+    if (!isLoaded || !isSignedIn) return;
+    let cancelled = false;
+    void (async () => {
+      try {
+        const tok = await getToken().catch(() => null);
+        const list = await councilJson<ConsultationListResponse>(
+          "/api/patient/consultations",
+          { method: "GET", token: tok }
+        );
+        if (!cancelled) setSiblings(list.consultations ?? []);
+      } catch {
+        if (!cancelled) setSiblings([]);
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [isLoaded, isSignedIn, getToken]);
+
+  const { prevId, nextId, position } = useMemo(() => {
+    const idx = siblings.findIndex((c) => c.id === consultationId);
+    if (idx === -1) return { prevId: null, nextId: null, position: null as string | null };
+    // List is sorted newest-first; chevron-left = previous (newer), chevron-right = next (older).
+    return {
+      prevId: idx > 0 ? siblings[idx - 1].id : null,
+      nextId: idx < siblings.length - 1 ? siblings[idx + 1].id : null,
+      position: `${idx + 1} of ${siblings.length}`,
+    };
+  }, [siblings, consultationId]);
+
+  useEffect(() => {
+    function onKey(e: KeyboardEvent) {
+      const t = e.target as HTMLElement | null;
+      // Don't hijack arrows while typing.
+      if (t && (t.tagName === "INPUT" || t.tagName === "TEXTAREA" || t.isContentEditable)) return;
+      if (e.metaKey || e.ctrlKey || e.altKey) return;
+      if (e.key === "ArrowLeft" && prevId) {
+        e.preventDefault();
+        router.push(`/patient/consultations/${prevId}`);
+      } else if (e.key === "ArrowRight" && nextId) {
+        e.preventDefault();
+        router.push(`/patient/consultations/${nextId}`);
+      }
+    }
+    window.addEventListener("keydown", onKey);
+    return () => window.removeEventListener("keydown", onKey);
+  }, [prevId, nextId, router]);
 
   const state: CaseState = useMemo(() => data?.case_state ?? {}, [data]);
 
@@ -140,6 +194,30 @@ export function ConsultationDetail({ consultationId }: { consultationId: string 
 
   return (
     <div className="space-y-6">
+      {/* Prev/next strip — chevrons mirror the patient-file order (newest first). */}
+      {(prevId || nextId || position) && (
+        <nav
+          className="flex items-center justify-between gap-3"
+          aria-label="Consultation navigation"
+        >
+          <ChevronLink
+            href={prevId ? `/patient/consultations/${prevId}` : null}
+            direction="prev"
+            label="Previous consultation"
+          />
+          {position && (
+            <span className="mono-label tabular-nums text-ink-muted">
+              {position}
+            </span>
+          )}
+          <ChevronLink
+            href={nextId ? `/patient/consultations/${nextId}` : null}
+            direction="next"
+            label="Next consultation"
+          />
+        </nav>
+      )}
+
       {/* Header strip */}
       <header className="plate-card p-6 md:p-8">
         <div className="flex items-baseline justify-between flex-wrap gap-3 mb-3">
@@ -320,5 +398,41 @@ function Panel({
       <h2 className="font-display text-[1.25rem] text-ink mb-4">{heading}</h2>
       {children ?? <p className="text-[15px] text-ink-faint italic">{empty}</p>}
     </div>
+  );
+}
+
+function ChevronLink({
+  href,
+  direction,
+  label,
+}: {
+  href: string | null;
+  direction: "prev" | "next";
+  label: string;
+}) {
+  const glyph = direction === "prev" ? "‹" : "›";
+  const text = direction === "prev" ? "Previous" : "Next";
+  const classes = [
+    "inline-flex items-center gap-2 rounded-full border px-3 py-1.5 text-[13px] transition-colors",
+    href
+      ? "border-line-strong text-ink-muted hover:border-indigo hover:text-indigo"
+      : "border-line text-ink-faint cursor-not-allowed opacity-60",
+  ].join(" ");
+
+  if (!href) {
+    return (
+      <span className={classes} aria-disabled="true" aria-label={label}>
+        {direction === "prev" && <span aria-hidden className="text-[16px] leading-none">{glyph}</span>}
+        <span className="mono-label">{text}</span>
+        {direction === "next" && <span aria-hidden className="text-[16px] leading-none">{glyph}</span>}
+      </span>
+    );
+  }
+  return (
+    <Link href={href} aria-label={label} className={classes}>
+      {direction === "prev" && <span aria-hidden className="text-[16px] leading-none">{glyph}</span>}
+      <span className="mono-label">{text}</span>
+      {direction === "next" && <span aria-hidden className="text-[16px] leading-none">{glyph}</span>}
+    </Link>
   );
 }
