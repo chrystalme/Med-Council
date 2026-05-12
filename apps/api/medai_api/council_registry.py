@@ -4,6 +4,7 @@ MedAI Council — shared registry (specialists, model allowlist, prompt fragment
 
 from __future__ import annotations
 
+import os
 from typing import Literal, TypedDict
 
 
@@ -46,6 +47,12 @@ MODELS: dict[str, ModelEntry] = {
         "tier": "pro",
         "description": "Vertex AI · Meta open-weight via managed endpoint",
     },
+    "gpt-oss-20b": {
+        "id": "openai/gpt-oss-20b",
+        "label": "GPT-OSS 20B",
+        "tier": "free",
+        "description": "OpenAI open-weight via OpenRouter · local-dev default",
+    },
     "gpt-5": {
         "id": "openai/gpt-5",
         "label": "GPT-5",
@@ -54,7 +61,24 @@ MODELS: dict[str, ModelEntry] = {
     },
 }
 
-DEFAULT_MODEL_KEY = "gemini-2-5-flash-lite-free"
+def _compute_default_model_key() -> str:
+    """Pick the free-tier default based on whether Vertex AI is configured.
+
+    Without Vertex env vars set, the gemini-flash-lite default would return
+    `provider_unavailable` on every call — Vertex needs `VERTEX_PROJECT` + ADC.
+    Fall back to OpenRouter's `gpt-oss-20b` so a dev with only OPENROUTER_API_KEY
+    can run the app end-to-end. Detection mirrors the lifespan check in main.py.
+    """
+    if (
+        os.environ.get("VERTEX_PROJECT")
+        or os.environ.get("GCP_PROJECT")
+        or os.environ.get("GOOGLE_CLOUD_PROJECT")
+    ):
+        return "gemini-2-5-flash-lite-free"
+    return "gpt-oss-20b"
+
+
+DEFAULT_MODEL_KEY = _compute_default_model_key()
 
 # Back-compat alias so existing council.py agent definitions keep compiling
 # until we migrate them to accept a per-run model override.
