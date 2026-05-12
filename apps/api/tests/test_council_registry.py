@@ -21,7 +21,7 @@ from medai_api.council_registry import (
 class GptOss20bAllowlistTest(unittest.TestCase):
     def test_entry_exists_with_expected_fields(self) -> None:
         entry = MODELS["gpt-oss-20b"]
-        self.assertEqual(entry["id"], "openai/gpt-oss-20b")
+        self.assertEqual(entry["id"], "openai/gpt-oss-20b:free")
         self.assertEqual(entry["tier"], "free")
         self.assertIn("OpenRouter", entry["description"])
 
@@ -32,7 +32,7 @@ class GptOss20bAllowlistTest(unittest.TestCase):
 
     def test_resolve_model_returns_openrouter_slug(self) -> None:
         slug, downgraded = resolve_model("gpt-oss-20b", "free")
-        self.assertEqual(slug, "openai/gpt-oss-20b")
+        self.assertEqual(slug, "openai/gpt-oss-20b:free")
         self.assertFalse(downgraded)
 
 

@@ -48,10 +48,10 @@ MODELS: dict[str, ModelEntry] = {
         "description": "Vertex AI · Meta open-weight via managed endpoint",
     },
     "gpt-oss-20b": {
-        "id": "openai/gpt-oss-20b",
+        "id": "openai/gpt-oss-20b:free",
         "label": "GPT-OSS 20B",
         "tier": "free",
-        "description": "OpenAI open-weight via OpenRouter · local-dev default",
+        "description": "OpenAI open-weight via OpenRouter (free variant) · local-dev default",
     },
     "gpt-5": {
         "id": "openai/gpt-5",
