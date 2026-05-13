@@ -48,8 +48,15 @@ def configure_langfuse() -> bool:
     try:
         if not _instrumented:
             from openinference.instrumentation.openai_agents import OpenAIAgentsInstrumentor
+            from agents.tracing import add_trace_processor
+            from agents.tracing.processors import BackendSpanExporter, BatchTraceProcessor
 
             OpenAIAgentsInstrumentor().instrument()
+            # The instrumentor replaces the SDK's default processor list with its
+            # own OTel processor — that silently kills exports to
+            # platform.openai.com/traces. Re-add BatchTraceProcessor so both
+            # Langfuse and OpenAI's own trace UI receive spans.
+            add_trace_processor(BatchTraceProcessor(BackendSpanExporter()))
             _instrumented = True
 
         from langfuse import get_client
