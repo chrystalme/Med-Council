@@ -230,12 +230,16 @@ async def lifespan(app: FastAPI):
         )
 
     _set_runtime_providers(council=council_provider, vertex=vertex_provider)
-    _run_migrations()
 
+    # Print inference + tracing before migrations so local dev still sees this when
+    # Postgres is slow or unreachable (Alembic upgrade runs next).
     default_label = f"vertex:{vertex_provider._default_model}" if vertex_provider else "none"
     print(f"✓ Inference  → Vertex AI  ({default_label}) + OpenRouter (gpt-5 only)")
     tracing_targets = "platform.openai.com/traces + Langfuse" if langfuse_enabled else "platform.openai.com/traces"
     print(f"✓ Tracing    → {tracing_targets}")
+
+    _run_migrations()
+
     print(f"✓ Database   → {_db.get_driver()}  (view feedback: /feedback/{FEEDBACK_SECRET})")
     if auth_configured():
         print("✓ Auth       → Clerk JWT verification enabled (CLERK_ISSUER set)")
