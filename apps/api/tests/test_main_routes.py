@@ -820,25 +820,86 @@ class AttachmentsListRouteTest(unittest.TestCase):
 
 
 class SpeechSynthesizeRouteTest(unittest.TestCase):
+    """Speech routes are Pro-only (require_pro). The local fixture has
+    CLERK_ISSUER unset which means require_pro lets anonymous callers through
+    with a dev plan — so the rejection branch is exercised by the
+    PatientEmailRouteTest 4xx case rather than re-tested here. These tests
+    instead override the dep to exercise the audio round-trip end-to-end."""
+
     def setUp(self) -> None:
         self.client = _client()
 
-    def test_returns_audio_bytes(self) -> None:
+    def test_returns_audio_bytes_when_pro_dependency_overridden(self) -> None:
+        """Override require_pro and stub the provider so the audio path
+        round-trips end-to-end. Verifies the router is wired to speech.py."""
         from medai_api import main as _main
+        from medai_api.auth import AuthUser, require_pro
 
         class _StubProvider:
             def synthesize(self, text, voice="alloy"):
                 return b"fake-mp3-bytes"
 
-        with patch("medai_api.speech.get_speech_provider", return_value=_StubProvider()):
-            with patch("medai_api.routers.speech.get_speech_provider", return_value=_StubProvider(), create=True):
-                r = self.client.post(
-                    "/api/speech/synthesize",
-                    json={"text": "hello"},
-                )
+        async def _fake_pro():
+            return AuthUser(user_id="u_test", email="t@test", plan="pro")
+
+        _main.app.dependency_overrides[require_pro] = _fake_pro
+        try:
+            with patch("medai_api.speech.get_speech_provider", return_value=_StubProvider()):
+                r = self.client.post("/api/speech/synthesize", json={"text": "hello"})
+        finally:
+            _main.app.dependency_overrides.pop(require_pro, None)
+
         self.assertEqual(r.status_code, 200)
         self.assertEqual(r.content, b"fake-mp3-bytes")
         self.assertIn("audio", r.headers.get("content-type", ""))
+
+
+class SpeechTranscribeRouteTest(unittest.TestCase):
+    """Transcription endpoint companion to the synthesize tests."""
+
+    def setUp(self) -> None:
+        self.client = _client()
+
+    def test_returns_transcript_when_pro_dependency_overridden(self) -> None:
+        from medai_api import main as _main
+        from medai_api.auth import AuthUser, require_pro
+
+        async def _fake_pro():
+            return AuthUser(user_id="u_test", email="t@test", plan="pro")
+
+        class _StubProvider:
+            def transcribe(self, data, mime, filename="audio.webm"):
+                return "the patient said hello"
+
+        _main.app.dependency_overrides[require_pro] = _fake_pro
+        try:
+            with patch("medai_api.speech.get_speech_provider", return_value=_StubProvider()):
+                r = self.client.post(
+                    "/api/speech/transcribe",
+                    files={"audio": ("test.webm", b"fakeaudio", "audio/webm")},
+                )
+        finally:
+            _main.app.dependency_overrides.pop(require_pro, None)
+
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json(), {"text": "the patient said hello"})
+
+    def test_rejects_empty_upload(self) -> None:
+        from medai_api import main as _main
+        from medai_api.auth import AuthUser, require_pro
+
+        async def _fake_pro():
+            return AuthUser(user_id="u_test", email="t@test", plan="pro")
+
+        _main.app.dependency_overrides[require_pro] = _fake_pro
+        try:
+            r = self.client.post(
+                "/api/speech/transcribe",
+                files={"audio": ("test.webm", b"", "audio/webm")},
+            )
+        finally:
+            _main.app.dependency_overrides.pop(require_pro, None)
+        self.assertEqual(r.status_code, 400)
 
 
 # ── Save consultation ───────────────────────────────────────────────────────
@@ -950,6 +1011,255 @@ class PatientEmailRouteTest(unittest.TestCase):
         # implementation-defined by require_pro / current configuration.
         self.assertGreaterEqual(r.status_code, 400)
         self.assertLess(r.status_code, 500)
+
+    def test_rejects_when_plan_and_message_both_empty(self) -> None:
+        from medai_api import main as _main
+        from medai_api.auth import AuthUser, require_pro
+
+        async def _fake_pro():
+            return AuthUser(user_id="u_test", email="t@test", plan="pro")
+
+        _main.app.dependency_overrides[require_pro] = _fake_pro
+        try:
+            r = self.client.post(
+                "/api/patient/email",
+                json={"to": "alice@example.com", "plan": "", "message": ""},
+            )
+        finally:
+            _main.app.dependency_overrides.pop(require_pro, None)
+        self.assertEqual(r.status_code, 400)
+        self.assertEqual(r.json()["detail"]["code"], "empty_email")
+
+    def test_rejects_invalid_email_format(self) -> None:
+        from medai_api import main as _main
+        from medai_api.auth import AuthUser, require_pro
+
+        async def _fake_pro():
+            return AuthUser(user_id="u_test", email="t@test", plan="pro")
+
+        _main.app.dependency_overrides[require_pro] = _fake_pro
+        try:
+            r = self.client.post(
+                "/api/patient/email",
+                json={"to": "not-an-email", "plan": "rest", "message": "ok"},
+            )
+        finally:
+            _main.app.dependency_overrides.pop(require_pro, None)
+        # Pydantic email regex rejection.
+        self.assertEqual(r.status_code, 422)
+
+    def test_send_succeeds_when_pro_dependency_overridden(self) -> None:
+        from medai_api import main as _main
+        from medai_api.auth import AuthUser, require_pro
+        from medai_api.routers import email as _email_router
+
+        async def _fake_pro():
+            return AuthUser(user_id="u_test", email="t@test", plan="pro")
+
+        sent: dict = {}
+
+        def _fake_send(**kwargs):
+            sent.update(kwargs)
+            return {"id": "resend_123"}
+
+        _main.app.dependency_overrides[require_pro] = _fake_pro
+        try:
+            with patch.object(_email_router, "send_patient_email", side_effect=_fake_send):
+                r = self.client.post(
+                    "/api/patient/email",
+                    json={
+                        "to": "alice@example.com",
+                        "patient_name": "Alice",
+                        "consensus": {"primaryDiagnosis": "ACS", "urgency": "urgent", "confidence": 80},
+                        "plan": "## Plan\nrest",
+                        "message": "Take care.",
+                    },
+                )
+        finally:
+            _main.app.dependency_overrides.pop(require_pro, None)
+
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json(), {"ok": True, "provider_id": "resend_123"})
+        # Consensus shape is unpacked into named kwargs for send_patient_email.
+        self.assertEqual(sent.get("primary_dx"), "ACS")
+        self.assertEqual(sent.get("urgency"), "urgent")
+        self.assertEqual(sent.get("confidence"), 80)
+        self.assertEqual(sent.get("to"), "alice@example.com")
+
+    def test_503_when_resend_not_configured(self) -> None:
+        from medai_api import main as _main
+        from medai_api.auth import AuthUser, require_pro
+        from medai_api.escalation import ResendNotConfiguredError
+        from medai_api.routers import email as _email_router
+
+        async def _fake_pro():
+            return AuthUser(user_id="u_test", email="t@test", plan="pro")
+
+        def _fake_send(**kwargs):
+            raise ResendNotConfiguredError("RESEND_API_KEY missing")
+
+        _main.app.dependency_overrides[require_pro] = _fake_pro
+        try:
+            with patch.object(_email_router, "send_patient_email", side_effect=_fake_send):
+                r = self.client.post(
+                    "/api/patient/email",
+                    json={"to": "alice@example.com", "plan": "x", "message": "y"},
+                )
+        finally:
+            _main.app.dependency_overrides.pop(require_pro, None)
+        self.assertEqual(r.status_code, 503)
+        self.assertEqual(r.json()["detail"]["code"], "email_not_configured")
+
+
+# ── Attachments create / delete ─────────────────────────────────────────────
+
+
+class AttachmentsCreateRouteTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = _client()
+        self.con = _FakeCon()
+        from medai_api.routers import attachments as _attachments_router
+
+        self._patcher = patch.object(_attachments_router._db, "connect", return_value=self.con)
+        self._patcher.start()
+        self.addCleanup(self._patcher.stop)
+
+    def test_404_when_case_missing(self) -> None:
+        self.con._cases_row = None
+        r = self.client.post(
+            "/api/cases/case_X/attachments",
+            data={"kind": "pasted", "text": "lab results say sodium 138"},
+        )
+        self.assertEqual(r.status_code, 404)
+
+    def test_403_when_case_owned_by_other_user(self) -> None:
+        self.con._cases_row = {"user_id": "someone_else"}
+        r = self.client.post(
+            "/api/cases/case_1/attachments",
+            data={"kind": "pasted", "text": "x"},
+        )
+        self.assertEqual(r.status_code, 403)
+
+    def test_400_on_unknown_kind(self) -> None:
+        # Kind validation runs before any DB lookup.
+        r = self.client.post(
+            "/api/cases/case_1/attachments",
+            data={"kind": "weird"},
+        )
+        self.assertEqual(r.status_code, 400)
+
+    def test_400_on_pasted_without_text(self) -> None:
+        self.con._cases_row = {"user_id": ""}
+        r = self.client.post(
+            "/api/cases/case_1/attachments",
+            data={"kind": "pasted", "text": "   "},
+        )
+        self.assertEqual(r.status_code, 400)
+
+    def test_creates_pasted_attachment(self) -> None:
+        self.con._cases_row = {"user_id": ""}
+        from medai_api.attachments import AttachmentRow
+
+        row = AttachmentRow(
+            id="att_1",
+            case_id="case_1",
+            user_id="",
+            kind="pasted",
+            filename=None,
+            mime_type=None,
+            text="lab text",
+            size_bytes=8,
+            question_index=2,
+            created_at="2026-01-01",
+        )
+
+        class _StubStore:
+            def save(self, *args, **kwargs):
+                return row
+
+        with patch("medai_api.attachments.get_attachment_store", return_value=_StubStore()):
+            r = self.client.post(
+                "/api/cases/case_1/attachments",
+                data={"kind": "pasted", "text": "lab text", "question_index": 2},
+            )
+        self.assertEqual(r.status_code, 200)
+        body = r.json()
+        self.assertEqual(body["id"], "att_1")
+        self.assertEqual(body["kind"], "pasted")
+        self.assertEqual(body["question_index"], 2)
+
+
+class AttachmentsDeleteRouteTest(unittest.TestCase):
+    def setUp(self) -> None:
+        self.client = _client()
+        self.con = _FakeCon()
+        from medai_api.routers import attachments as _attachments_router
+
+        self._patcher = patch.object(_attachments_router._db, "connect", return_value=self.con)
+        self._patcher.start()
+        self.addCleanup(self._patcher.stop)
+
+    def test_404_when_attachment_missing(self) -> None:
+        class _StubStore:
+            def delete(self, con, attachment_id, user_id):
+                return False
+
+        with patch("medai_api.attachments.get_attachment_store", return_value=_StubStore()):
+            r = self.client.delete("/api/cases/case_1/attachments/missing")
+        self.assertEqual(r.status_code, 404)
+
+    def test_deletes_returns_ok(self) -> None:
+        class _StubStore:
+            def delete(self, con, attachment_id, user_id):
+                return True
+
+        with patch("medai_api.attachments.get_attachment_store", return_value=_StubStore()):
+            r = self.client.delete("/api/cases/case_1/attachments/att_1")
+        self.assertEqual(r.status_code, 200)
+        self.assertEqual(r.json(), {"ok": True})
+
+
+# ── Consultation cap (free tier) ────────────────────────────────────────────
+
+
+class ConsultationCapTest(unittest.TestCase):
+    """Free-tier callers can only save up to FREE_CONSULTATION_CAP saved
+    sessions. Once they hit it, save_consultation must 402 with the
+    consultation_cap detail code."""
+
+    def setUp(self) -> None:
+        self.client = _client()
+        self.con = _FakeCon()
+        from medai_api.routers import consultations as _c_router
+
+        self._patcher = patch.object(_c_router._db, "connect", return_value=self.con)
+        self._patcher.start()
+        self.addCleanup(self._patcher.stop)
+
+    def test_402_when_free_tier_at_cap(self) -> None:
+        from medai_api.routers.consultations import FREE_CONSULTATION_CAP
+
+        original_execute = self.con.execute
+
+        def execute(sql, params=None):
+            up = sql.upper()
+            if up.lstrip().startswith("SELECT") and "FROM CASES" in up:
+                return _FakeCursor(row={"state": {}})
+            if "COUNT(*) AS N FROM CONSULTATIONS" in up:
+                return _FakeCursor(row={"n": FREE_CONSULTATION_CAP})
+            return original_execute(sql, params)
+
+        self.con.execute = execute  # type: ignore[assignment]
+
+        r = self.client.post(
+            "/api/patient/consultations",
+            json={
+                "case_id": "case_1",
+                "summary": "Saved consultation #5 — over the cap.",
+            },
+        )
+        self.assertEqual(r.status_code, 402)
+        self.assertEqual(r.json()["detail"]["code"], "consultation_cap")
 
 
 # ── Exception handling ──────────────────────────────────────────────────────
