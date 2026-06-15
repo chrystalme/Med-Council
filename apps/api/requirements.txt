@@ -35,7 +35,7 @@ cffi==2.0.0 ; platform_python_implementation != 'PyPy'
     # via cryptography
 charset-normalizer==3.4.7
     # via requests
-click==8.3.2
+click==8.3.3
     # via uvicorn
 colorama==0.4.6 ; sys_platform == 'win32'
     # via
@@ -48,7 +48,7 @@ cryptography==46.0.7
     #   pyjwt
 distro==1.9.0
     # via openai
-fastapi==0.136.0
+fastapi==0.136.1
     # via medai-council-api
 google-api-core==2.30.3
     # via
@@ -138,7 +138,7 @@ openai==2.32.0
     # via
     #   medai-council-api
     #   openai-agents
-openai-agents==0.14.3
+openai-agents==0.14.6
     # via medai-council-api
 openinference-instrumentation==0.1.47
     # via openinference-instrumentation-openai-agents
@@ -188,7 +188,7 @@ proto-plus==1.27.2
     #   google-api-core
     #   google-cloud-speech
     #   google-cloud-texttospeech
-protobuf==6.33.6
+protobuf==7.34.1
     # via
     #   google-api-core
     #   google-cloud-speech
@@ -314,7 +314,7 @@ uvloop==0.22.1 ; platform_python_implementation != 'PyPy' and sys_platform != 'c
     # via uvicorn
 watchfiles==1.1.1
     # via uvicorn
-websockets==15.0.1
+websockets==16.0
     # via
     #   openai-agents
     #   uvicorn
