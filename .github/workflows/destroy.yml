@@ -64,6 +64,17 @@ jobs:
         working-directory: terraform
         run: terraform init -backend-config="bucket=${TF_STATE_BUCKET}" -input=false
 
+      - name: Remove secrets from state (preserve in GCP)
+        if: env.TARGET == ''
+        working-directory: terraform
+        run: |
+          # Remove all secret resources from state so they aren't destroyed
+          # Secrets have lifecycle.prevent_destroy=true and remain in GCP
+          for secret in $(terraform state list | grep 'google_secret_manager_secret'); do
+            echo "Removing $secret from state..."
+            terraform state rm "$secret"
+          done
+
       - name: Terraform destroy
         working-directory: terraform
         run: |
@@ -72,7 +83,7 @@ jobs:
             TARGET_ARG="-target=$TARGET"
             echo "::notice::Scoped destroy: $TARGET"
           else
-            echo "::notice::Full-stack destroy (Cloud SQL retained — deletion_protection=true)"
+            echo "::notice::Full-stack destroy (Cloud SQL retained — deletion_protection=true; secrets preserved in GCP)"
           fi
           terraform destroy -input=false -auto-approve \
             -var="project_id=${PROJECT_ID}" \
@@ -90,4 +101,5 @@ jobs:
               echo "- scope: full stack"
             fi
             echo "- Cloud SQL: preserved (deletion_protection=true in main.tf)."
+            echo "- Secret Manager secrets: preserved in GCP (removed from Terraform state)."
           } >> "$GITHUB_STEP_SUMMARY"
