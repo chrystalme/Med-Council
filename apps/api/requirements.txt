@@ -226,7 +226,7 @@ pyjwt==2.12.1
     # via
     #   mcp
     #   medai-council-api
-pypdf==6.10.2
+pypdf==6.13.3
     # via medai-council-api
 python-dotenv==1.2.2
     # via
