@@ -21,7 +21,7 @@ jobs:
     name: Terraform shared-config guard
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       # `var.secret_names` and `var.ar_repo` are shared between the dev and
       # prod workspaces — see terraform/imports.tf. If either is overridden in
@@ -39,7 +39,7 @@ jobs:
     name: Web (Next.js)
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: pnpm/action-setup@v6
         with:
@@ -75,7 +75,7 @@ jobs:
       run:
         working-directory: apps/api
     steps:
-      - uses: actions/checkout@v6
+      - uses: actions/checkout@v7
 
       - uses: astral-sh/setup-uv@v7
         with:
@@ -100,7 +100,7 @@ jobs:
 
       - name: Upload coverage artefact
         if: always()
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: api-coverage
           path: apps/api/coverage.xml
