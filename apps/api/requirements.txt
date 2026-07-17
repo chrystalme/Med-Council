@@ -116,7 +116,7 @@ idna==3.12
     #   requests
 importlib-metadata==8.7.1
     # via opentelemetry-api
-jiter==0.14.0
+jiter==0.16.0
     # via openai
 jsonschema==4.26.0
     # via mcp
