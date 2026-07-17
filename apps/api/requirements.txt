@@ -86,7 +86,7 @@ greenlet==3.5.2 ; platform_machine == 'AMD64' or platform_machine == 'WIN32' or 
     # via sqlalchemy
 griffelib==2.0.2
     # via openai-agents
-grpcio==1.80.0
+grpcio==1.82.1
     # via
     #   google-api-core
     #   google-cloud-speech
