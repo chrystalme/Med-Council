@@ -144,7 +144,7 @@ openinference-instrumentation==0.1.47
     # via openinference-instrumentation-openai-agents
 openinference-instrumentation-openai-agents==1.4.1
     # via medai-council-api
-openinference-semantic-conventions==0.1.29
+openinference-semantic-conventions==0.1.30
     # via
     #   openinference-instrumentation
     #   openinference-instrumentation-openai-agents
